@@ -12,6 +12,7 @@ import com.radialtype.engine.GeometryEngine
 import com.radialtype.engine.TouchStateMachine
 import com.radialtype.engine.TouchStateMachine.TouchState
 import com.radialtype.haptics.HapticController
+import com.radialtype.settings.SettingsManager
 import com.radialtype.text.CharacterMap
 import com.radialtype.text.InputDispatcher
 import com.radialtype.text.SelectionTracker
@@ -19,7 +20,11 @@ import com.radialtype.text.SyllableProvider
 
 /**
  * The small, touchable pad that starts radial gestures.
- * Module 11: commits via InputDispatcher instead of onCommitText.
+ *
+ * Haptic feedback (Module 13 redesign):
+ * - PRIMARY → SECONDARY state change: [HapticController.pulseSecondaryEnter]
+ * - INNER → OUTER ring change WHILE in SECONDARY: [HapticController.pulseSecondaryRingOut]
+ * - No other events produce haptics.
  */
 class RadialKeyboardView(
     context: Context
@@ -29,10 +34,7 @@ class RadialKeyboardView(
         private const val TAG = "RadialKeyboardView"
     }
 
-    /** Pushes a render snapshot to the fullscreen overlay, every frame. */
     var onRenderFrame: ((RadialRenderData) -> Unit)? = null
-
-    /** Set by RadialOverlayController; resolves the InputConnection lazily. */
     var inputDispatcher: InputDispatcher? = null
 
     val haptics = HapticController(context)
@@ -88,9 +90,11 @@ class RadialKeyboardView(
     ).apply {
         onStateChanged = { newState ->
             Log.d(TAG, "State -> $newState")
-            val relevant = (lastHapticState == TouchState.PRIMARY && newState == TouchState.SECONDARY) ||
-                           (lastHapticState == TouchState.SECONDARY && newState == TouchState.PRIMARY)
-            if (relevant) haptics.pulseModeChange()
+
+            // Haptic 1 of 2: PRIMARY → SECONDARY
+            if (lastHapticState == TouchState.PRIMARY && newState == TouchState.SECONDARY) {
+                haptics.pulseSecondaryEnter()
+            }
             lastHapticState = newState
 
             selectionTracker.update(currentRing, currentSegment)
@@ -108,14 +112,18 @@ class RadialKeyboardView(
         }
         onRingChanged = { ring ->
             Log.d(TAG, "Ring changed -> $ring")
-            val prev = previousRing
-            if (prev != GeometryEngine.Ring.NONE && ring != GeometryEngine.Ring.NONE) {
-                haptics.pulseRingChange()
+
+            // Haptic 2 of 2: INNER → OUTER on the SECONDARY menu only
+            if (state == TouchState.SECONDARY &&
+                previousRing == GeometryEngine.Ring.INNER &&
+                ring == GeometryEngine.Ring.OUTER
+            ) {
+                haptics.pulseSecondaryRingOut()
             }
         }
         onSegmentChanged = { segment ->
             Log.d(TAG, "Segment changed -> $segment")
-            haptics.pulseSegmentChange(this@RadialKeyboardView)
+            // No haptic on segment changes
             selectionTracker.update(currentRing, currentSegment)
         }
     }
@@ -131,6 +139,8 @@ class RadialKeyboardView(
             val nx = dx / zoneRX
             val ny = dy / zoneRY
             if (nx * nx + ny * ny > 1f) return false
+            // Refresh all settings (radii + dwell) at gesture start
+            touchStateMachine.refreshFromSettings()
         }
         return touchStateMachine.onTouchEvent(event)
     }

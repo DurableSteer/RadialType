@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory android:title="Rendering">
+        <SwitchPreferenceCompat
+            android:key="debug_mode"
+            android:title="Debug mode"
+            android:summary="Draw the radial menu overlay while typing"
+            android:defaultValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Typing">
+        <SwitchPreferenceCompat
+            android:key="haptic_feedback"
+            android:title="Haptic feedback"
+            android:summary="Vibrate on secondary-menu entry and inner→outer ring moves"
+            android:defaultValue="true" />
+
+        <SeekBarPreference
+            android:key="vibration_length"
+            android:title="Vibration length (ms)"
+            android:summary="Duration of each haptic pulse"
+            android:defaultValue="30"
+            app:min="10"
+            android:max="150"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="dwell_duration"
+            android:title="Dwell duration (ms)"
+            android:summary="How long the finger must rest before the secondary syllable menu opens"
+            android:defaultValue="125"
+            app:min="100"
+            android:max="800"
+            app:showSeekBarValue="true" />
+
+        <SwitchPreferenceCompat
+            android:key="auto_space"
+            android:title="Auto-space after commit"
+            android:summary="Insert a space after every committed label"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="auto_capitalization"
+            android:title="Auto-capitalization"
+            android:summary="Capitalize the first letter of sentences"
+            android:defaultValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Advanced — Ring geometry">
+        <SeekBarPreference
+            android:key="inner_ring_radius"
+            android:title="Inner ring radius (dp)"
+            android:summary="Deadzone edge; inner ring starts here"
+            android:defaultValue="60"
+            app:min="30"
+            android:max="100"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="outer_ring_radius"
+            android:title="Outer ring radius (dp)"
+            android:summary="Inner/outer ring boundary"
+            android:defaultValue="120"
+            app:min="60"
+            android:max="200"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Activation">
+        <Preference
+            android:key="enable_keyboard_button"
+            android:title="Enable RadialType Keyboard"
+            android:summary="Open system keyboard settings to toggle RadialType on" />
+
+        <Preference
+            android:key="overlay_permission"
+            android:title="Allow Drawing Over Other Apps"
+            android:summary="Required for the floating touch pad and render layer" />
+    </PreferenceCategory>
+
+</PreferenceScreen>

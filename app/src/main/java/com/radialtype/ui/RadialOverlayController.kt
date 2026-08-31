@@ -9,10 +9,12 @@ import android.view.WindowManager
 import com.radialtype.text.CharacterMap
 import com.radialtype.text.InputDispatcher
 import com.radialtype.text.SyllableProvider
+import com.radialtype.settings.SettingsManager
 
 /**
  * Owns the two-window setup: a small touchable pad and a lazy fullscreen
- * render layer. Module 11 adds the InputDispatcher, wired from the IME.
+ * render layer. Module 11 adds the InputDispatcher; Module 12 ensures
+ * SettingsManager is initialized so runtime settings work immediately.
  */
 class RadialOverlayController(
     private val context: Context,
@@ -43,6 +45,10 @@ class RadialOverlayController(
     private var overlayAdded = false
 
     init {
+        // Ensure SettingsManager has a context for SharedPreferences reads
+        if (!SettingsManager.isInitialized) {
+            SettingsManager.init(context)
+        }
         padView.inputDispatcher = inputDispatcher
         padView.onRenderFrame = { data -> onFrame(data) }
         renderer.debugMode = true
@@ -91,7 +97,7 @@ class RadialOverlayController(
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            gravity = Gravity.TOP or Gravity.START
             x = (zoneCX - rxPx).toInt()
             y = (zoneCY - ryPx).toInt()
         }

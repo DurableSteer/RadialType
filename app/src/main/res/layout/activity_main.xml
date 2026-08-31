@@ -1,36 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/settings_container"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:gravity="center"
-    android:padding="32dp">
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/settings_intro"
-        android:textSize="16sp"
-        android:layout_marginBottom="32dp" />
-
-    <Button
-        android:id="@+id/btnEnable"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/btn_enable"
-        android:layout_marginBottom="16dp" />
-
-    <Button
-        android:id="@+id/btnSwitch"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/btn_switch" />
-        
-    <Button
-        android:id="@+id/btnOverlay"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/btn_overlay"
-        android:layout_marginBottom="16dp" />
-
-</LinearLayout>
+    android:layout_height="match_parent" />

@@ -12,7 +12,7 @@
 
         <!--
           Settings landing page. Uses standard LAUNCHER intent so it
-          appears in the app drawer. Guides users through IME activation.
+          appears in the app drawer. Hosts the settings fragment.
         -->
         <activity
             android:name=".settings.MainActivity"
@@ -22,6 +22,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        
+        <activity
+            android:name=".settings.LayoutEditorActivity"
+            android:exported="false"
+            android:label="Custom Layout" />
+
+        <!-- Standalone settings host, reachable from system IME settings. -->
+        <activity
+            android:name=".settings.SettingsActivity"
+            android:exported="true"
+            android:label="@string/settings_activity_title" />
 
         <!--
           The IME service itself.

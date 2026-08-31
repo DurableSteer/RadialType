@@ -1,8 +1,14 @@
 <resources>
     <string name="app_name">RadialType</string>
     <string name="subtype_en_US">English (US)</string>
-    <string name="settings_intro">To use RadialType:\n\n1. Tap "Enable Keyboard" below and toggle RadialType on.\n2. Tap "Switch Keyboard" and select RadialType as your input method.</string>
+    <string name="settings_activity_title">RadialType Settings</string>
     <string name="btn_enable">Enable Keyboard</string>
     <string name="btn_switch">Switch Keyboard</string>
     <string name="btn_overlay">Allow Drawing Over Other Apps</string>
+
+    <!-- Layout editor -->
+    <string name="layout_editor_hint">Enter a JSON layout. Each ring array has 8 slots (segment 0 = east, clockwise). Tokens: DEL, SHIFT, SPACE.</string>
+    <string name="btn_load_sample">Load Sample Layout</string>
+    <string name="layout_save">Save</string>
+    <string name="layout_saved">Layout saved</string>
 </resources>

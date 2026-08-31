@@ -14,6 +14,7 @@ import com.radialtype.engine.GeometryEngine
 import com.radialtype.engine.GeometryEngine.Ring
 import com.radialtype.engine.TouchStateMachine
 import com.radialtype.engine.TouchStateMachine.TouchState
+import com.radialtype.settings.SettingsManager
 import com.radialtype.text.CharacterMap
 import com.radialtype.text.SyllableProvider
 import kotlin.math.cos
@@ -40,6 +41,9 @@ class RadialRenderData(
  * PRIMARY = cyan accent, SECONDARY = magenta, identical ring geometry.
  * The deadzone is a dark void with a faint red rim. Also draws the idle
  * first-touch ovoid so users know where the keyboard "lives".
+ *
+ * Module 12: ring radii and visibility are pulled from [SettingsManager]
+ * on every frame, so advanced slider changes render live.
  */
 class RadialRenderer(
     context: Context,
@@ -53,26 +57,25 @@ class RadialRenderer(
         private const val FLOATING_TEXT_SP = 48f
         private const val MENU_LABEL_SP = 20f
 
-        // ── Tokyo Night palette (alpha-heavy literals are Long) ──
+        // ── Tokyo Night palette ──────────────────────────────────
         private const val CYAN = 0xFF7AA2F7L
         private const val MAGENTA = 0xFFBB9AF7L
         private const val FG_MUTED = 0xE6A9B1D6L
         private const val FG_BRIGHT = 0xFFF5EBFAL
         private const val PANEL_BASE = 0xE01A1B26L
-        private const val PANEL_ACTIVE_ALPHA = 0x66000000   // Int — fits
+        private const val PANEL_ACTIVE_ALPHA = 0x66000000
         private const val DEAD_FILL = 0xF2161616L
         private const val DEAD_RIM = 0x66F7768EL
         private const val ZONE_STROKE = 0x597AA2F7L
     }
 
-    var debugMode: Boolean = false
+    var debugMode: Boolean = true
     var showIdleZoneHint: Boolean = true
 
     var deadZoneRadius: Float = GeometryEngine.DEAD_ZONE_RADIUS
     var innerRadiusMax: Float = GeometryEngine.INNER_RADIUS_MAX
     var outerRadiusMax: Float = GeometryEngine.OUTER_RADIUS_MAX
 
-    // Idle first-touch zone (px), set by the keyboard view.
     private var zoneCX = -1f
     private var zoneCY = -1f
     private var zoneRX = 0f
@@ -106,13 +109,6 @@ class RadialRenderer(
         color = DEAD_RIM.toInt()
     }
 
-    private val zonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1.5f * density
-        color = ZONE_STROKE.toInt()
-        pathEffect = DashPathEffect(floatArrayOf(8f * density, 8f * density), 0f)
-    }
-
     private val menuLabelPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = spToPx(MENU_LABEL_SP, context)
         textAlign = Paint.Align.CENTER
@@ -126,18 +122,22 @@ class RadialRenderer(
     }
 
     private val scratchPath = Path()
-    private val scratchRect = android.graphics.RectF()
+    private val scratchRect = RectF()
 
-    // ── Public API ───────────────────────────────────────────────
-
-    /** Called by the keyboard view once the view size is known. */
     fun setTouchZone(cx: Float, cy: Float, rx: Float, ry: Float) {
         zoneCX = cx; zoneCY = cy; zoneRX = rx; zoneRY = ry
     }
 
     fun render(canvas: Canvas, data: RadialRenderData) {
+        // Live-sync configurable geometry each frame.
+        if (SettingsManager.isInitialized) {
+            deadZoneRadius = SettingsManager.innerRingRadius
+            innerRadiusMax = SettingsManager.outerRingRadius
+            outerRadiusMax = SettingsManager.outerRingMaxRadius
+        }
+
         if (data.state == TouchState.IDLE) {
-            if (debugMode && showIdleZoneHint) drawIdleZone(canvas)
+            if (effectiveDebug && showIdleZoneHint) drawIdleZone(canvas)
             return
         }
 
@@ -156,11 +156,12 @@ class RadialRenderer(
             }
         }
 
-        if (debugMode) drawMenu(canvas, cx, cy, accent, data)
+        if (effectiveDebug) drawMenu(canvas, cx, cy, accent, data)
         drawFloatingLabel(canvas, data, accent)
     }
 
-    // ── Menu drawing ─────────────────────────────────────────────
+    private val effectiveDebug: Boolean
+        get() = debugMode && (!SettingsManager.isInitialized || SettingsManager.debugMode)
 
     private fun drawMenu(canvas: Canvas, cx: Float, cy: Float, accent: Int, data: RadialRenderData) {
         val deadPx = deadZoneRadius * density
@@ -188,7 +189,7 @@ class RadialRenderer(
 
         drawDeadZone(canvas, cx, cy, deadPx, data.state == TouchState.SECONDARY)
 
-        // 3. Labels: characters in PRIMARY, ranked syllables in SECONDARY.
+        // 3. Labels
         if (data.state == TouchState.PRIMARY) {
             drawPrimaryLabels(canvas, cx, cy)
         } else {
@@ -240,12 +241,10 @@ class RadialRenderer(
 
     private fun drawDeadZone(canvas: Canvas, cx: Float, cy: Float, rPx: Float, isSecondary: Boolean) {
         canvas.drawCircle(cx, cy, rPx, deadFillPaint)
-        // Primary = faint red rim; Secondary = amber rim + amber glow ring,
-        // so the two modes are distinguishable at a glance.
         val rimColor = if (isSecondary) 0x66F7B96EL.toInt() else DEAD_RIM.toInt()
         deadRimPaint.color = rimColor
         if (isSecondary) {
-            glowPaint.color = 0x88F7B96E.toInt()
+            glowPaint.color = 0x88F7B96EL.toInt()
             canvas.drawCircle(cx, cy, rPx, glowPaint)
         }
         canvas.drawCircle(cx, cy, rPx, deadRimPaint)
@@ -254,16 +253,7 @@ class RadialRenderer(
     private fun drawIdleZone(canvas: Canvas) {
         if (zoneRX <= 0f || zoneRY <= 0f) return
         canvas.drawOval(zoneCX - zoneRX, zoneCY - zoneRY,
-            zoneCX + zoneRX, zoneCY + zoneRY, zoneOutlinePaint())
-    }
-
-    private fun zoneOutlinePaint(): Paint = zoneStroke
-
-    private val zoneStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1.5f * density
-        color = ZONE_STROKE.toInt()
-        pathEffect = DashPathEffect(floatArrayOf(8f * density, 8f * density), 0f)
+            zoneCX + zoneRX, zoneCY + zoneRY, zoneStroke)
     }
 
     private fun drawFloatingLabel(canvas: Canvas, data: RadialRenderData, accent: Int) {
@@ -274,8 +264,6 @@ class RadialRenderer(
         val y = (data.currentY - LABEL_OFFSET_PX).coerceAtLeast(floatingLabelPaint.textSize)
         canvas.drawText(label, data.currentX, y, floatingLabelPaint)
     }
-
-    // ── Geometry helpers ─────────────────────────────────────────
 
     private fun annularSlicePath(cx: Float, cy: Float, rInner: Float, rOuter: Float, seg: Int): Path {
         val start = seg * 45f - 22.5f
@@ -291,11 +279,9 @@ class RadialRenderer(
     private fun drawAnnularSlice(canvas: Canvas, cx: Float, cy: Float,
                                  rInner: Float, rOuter: Float, seg: Int, fillColor: Int) {
         val path = annularSlicePath(cx, cy, rInner, rOuter, seg)
-        sectorFillPaint.color = fill(sectorFillPaint, fillColor)
+        sectorFillPaint.color = fillColor
         canvas.drawPath(path, sectorFillPaint)
     }
-
-    private fun fill(paint: Paint, color: Int): Int { paint.color = color; return color }
 
     private fun sectorColor(accent: Int, active: Boolean): Int =
         if (active) PANEL_ACTIVE_ALPHA or (accent and 0x00FFFFFF)
@@ -303,4 +289,11 @@ class RadialRenderer(
 
     private fun spToPx(sp: Float, context: Context): Float =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sp, context.resources.displayMetrics)
+
+    private val zoneStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
+        color = ZONE_STROKE.toInt()
+        pathEffect = DashPathEffect(floatArrayOf(8f * density, 8f * density), 0f)
+    }
 }

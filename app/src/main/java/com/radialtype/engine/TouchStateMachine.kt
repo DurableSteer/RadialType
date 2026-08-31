@@ -5,6 +5,7 @@ import android.view.MotionEvent
 import android.os.Handler
 import android.os.Looper
 import com.radialtype.engine.GeometryEngine.Ring
+import com.radialtype.settings.SettingsManager
 
 /**
  * Finite state machine for RadialType's single-gesture touch tracking,
@@ -15,28 +16,20 @@ import com.radialtype.engine.GeometryEngine.Ring
  * - PRIMARY   Finger is down, performing the primary radial selection.
  * - SECONDARY Finger dwelled long enough to activate a secondary menu.
  *
- * Both PRIMARY and SECONDARY use the same [GeometryEngine.computeRing]
- * and [GeometryEngine.computeSegment] — the secondary menu is identical
- * to the primary (same rings, same deadzone), simply re-centred on the
- * dwell point.
- *
  * Deadzone behavior:
- * Inside the center deadzone ([GeometryEngine.DEAD_ZONE_RADIUS]) the
- * ring resolves to [Ring.NONE]. While NONE:
+ * Inside the center deadzone the ring resolves to [Ring.NONE]. While NONE:
  * - No segment changes are reported (and thus no segment haptics).
  * - Dwelling does NOT enter SECONDARY.
- * Overshoot beyond [GeometryEngine.OUTER_RADIUS_MAX] clamps to
- * [Ring.OUTER] instead of deselecting — the outer-ring segment on the
- * anchor→finger ray remains the selection.
+ * Overshoot beyond the outer edge clamps to [Ring.OUTER] instead of
+ * deselecting.
  *
  * Segment suppression:
  * Immediately after a ring change, segment-change detection is
- * suppressed for [SEGMENT_SUPPRESSION_MS] milliseconds to prevent
- * spurious angular jitter during radial moves.
+ * suppressed for [SEGMENT_SUPPRESSION_MS] milliseconds.
  *
- * Secondary behavior:
- * Identical geometry, re-centred on the dwell point. The gesture ends
- * in SECONDARY only via ACTION_UP (commit) or ACTION_CANCEL.
+ * Runtime settings (Module 12): dwell duration and ring radii are
+ * refreshed from [com.radialtype.settings.SettingsManager] on every
+ * ACTION_DOWN, so slider changes apply from the next gesture onward.
  *
  * @param geometryEngine Injected for testability; defaults to a new instance.
  * @param density Screen density for px→dp conversion.
@@ -117,6 +110,17 @@ class TouchStateMachine(
 
     // ── Public API ───────────────────────────────────────────────
 
+    /**
+     * Syncs engine geometry + dwell timing with the current persisted
+     * settings. Called on ACTION_DOWN so runtime slider changes take
+     * effect from the very next gesture.
+     */
+    fun refreshFromSettings() {
+        geometryEngine.refreshFromSettings()
+        dwellDurationMs = SettingsManager.dwellDurationMs.toLong()
+        dwellTimer.dwellDurationMs = dwellDurationMs
+    }
+
     fun onTouchEvent(event: MotionEvent): Boolean {
         return when (event.actionMasked) {
             MotionEvent.ACTION_DOWN   -> handleDown(event)
@@ -129,8 +133,7 @@ class TouchStateMachine(
 
     /**
      * Transitions to SECONDARY state. Suppressed while the finger sits
-     * in the deadzone (ring NONE) — dwelling on nothing must not open
-     * the syllable menu.
+     * in the deadzone (ring NONE).
      */
     fun enterSecondary() {
         if (state != TouchState.PRIMARY) {
@@ -150,6 +153,8 @@ class TouchStateMachine(
     // ── Handlers ─────────────────────────────────────────────────
 
     private fun handleDown(event: MotionEvent): Boolean {
+        refreshFromSettings()
+
         anchorX = event.x
         anchorY = event.y
         currentX = event.x
@@ -199,10 +204,8 @@ class TouchStateMachine(
     /**
      * Common geometry resolution for both states. In SECONDARY the
      * anchor is the dwell point; in PRIMARY it is the touch-down point.
-     * Deadzone (ring NONE) suppresses segment updates and haptics;
-     * overshoot beyond the outer edge clamps to OUTER.
      */
-        private fun resolveGeometry(event: MotionEvent, anchorX: Float, anchorY: Float) {
+    private fun resolveGeometry(event: MotionEvent, anchorX: Float, anchorY: Float) {
         val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
         val distDp = GeometryEngine.pxToDp(distPx, density)
         val angleDeg = geometryEngine.angle(anchorX, anchorY, currentX, currentY)
@@ -213,8 +216,6 @@ class TouchStateMachine(
             previousRing = currentRing
             currentRing = newRing
             if (newRing == Ring.NONE) {
-                // Entering the deadzone deselects everything — no lingering
-                // segment highlight, in PRIMARY and SECONDARY alike.
                 previousSegment = currentSegment
                 currentSegment = -1
             }
@@ -227,7 +228,6 @@ class TouchStateMachine(
 
         val timeSinceRingChange = event.eventTime - lastRingChangeTime
         if (timeSinceRingChange >= SEGMENT_SUPPRESSION_MS) {
-            // Deadzone: no segment selection (and no segment haptics)
             if (newRing != Ring.NONE && newSegment != currentSegment) {
                 previousSegment = currentSegment
                 currentSegment = newSegment
@@ -245,7 +245,6 @@ class TouchStateMachine(
     }
 
     private fun handleSecondaryMove(event: MotionEvent) {
-        // Same rings, same deadzone — just centred on the dwell point.
         resolveGeometry(event, secondaryAnchorX, secondaryAnchorY)
     }
 

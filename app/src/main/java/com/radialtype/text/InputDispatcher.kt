@@ -1,38 +1,45 @@
 package com.radialtype.text
 
 import android.view.inputmethod.InputConnection
+import com.radialtype.settings.SettingsManager
 
 /**
  * Module 11 — Handles text commitment to the active input field.
  *
  * The InputConnection is resolved lazily via [connectionProvider] because
  * it is only valid while an input session is active.
+ *
+ * Module 12: auto-space and auto-capitalization are read from
+ * [SettingsManager] at commit time, so toggles take effect immediately.
  */
 class InputDispatcher(
     private val connectionProvider: () -> InputConnection?
 ) {
 
-    /** Auto-commit a space after every commit (configurable setting). */
-    var autoSpaceEnabled: Boolean = false
+    /** When true, the settings toggle decides whether spaces are added. */
+    var autoSpaceEnabled: Boolean = true
 
     /**
-     * Commits the given label with basic sentence capitalization.
-     * Capitalizes the first letter when the text before the cursor is
-     * empty, ends with ". ", "? ", "! ", or a newline.
+     * Commits the given label with basic sentence capitalization
+     * (when the auto-capitalization setting is enabled). Capitalizes
+     * the first letter when the text before the cursor is empty, ends
+     * with ". ", "? ", "! ", or a newline.
      */
     fun commit(label: String) {
         if (label.isEmpty()) return
         val ic = connectionProvider() ?: return
 
-        val before = ic.getTextBeforeCursor(10, 0)?.toString() ?: ""
-        val capitalized = if (shouldCapitalize(before)) {
+        val capitalized = if (SettingsManager.autoCapitalization && shouldCapitalize(
+                ic.getTextBeforeCursor(10, 0)?.toString() ?: ""
+            )
+        ) {
             label.replaceFirstChar { it.uppercase() }
         } else {
             label
         }
 
         ic.commitText(capitalized, 1)
-        if (autoSpaceEnabled) commitSpace()
+        if (SettingsManager.autoSpaceEnabled) commitSpace()
     }
 
     /** Commits a single space character. */
