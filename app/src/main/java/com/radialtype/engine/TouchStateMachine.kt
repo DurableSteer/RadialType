@@ -2,6 +2,8 @@ package com.radialtype.engine
 
 import android.util.Log
 import android.view.MotionEvent
+import android.os.Handler
+import android.os.Looper
 import com.radialtype.engine.GeometryEngine.Ring
 
 /**
@@ -39,19 +41,37 @@ import com.radialtype.engine.GeometryEngine.Ring
  */
 class TouchStateMachine(
     private val geometryEngine: GeometryEngine = GeometryEngine(),
-    var density: Float = 1f
+    var density: Float = 1f,
+    /** Dwell threshold before PRIMARY → SECONDARY. */
+    var dwellDurationMs: Long = DEFAULT_DWELL_MS,
+    /** Injectable override for unit testing (real timer used when null). */
+    dwellTimerOverride: DwellTimer? = null
 ) {
 
     companion object {
         private const val TAG = "TouchStateMachine"
 
-        /** Outer radius of the secondary ring, in dp. */
         const val SECONDARY_RING_MAX = 100f
-
-        /** Duration (ms) to suppress segment detection after a ring change. */
         const val SEGMENT_SUPPRESSION_MS = 50L
-    }
 
+        /** Default dwell duration before PRIMARY → SECONDARY. */
+        const val DEFAULT_DWELL_MS = 300L
+    }
+    
+    // ── Dwell timer (Module 7) ──────────────────────────────────
+
+    /**
+     * Fires [enterSecondary] after [dwellDurationMs] of no segment/ring
+     * change in PRIMARY. An override can be injected for tests; otherwise
+     * a real timer on the main looper is created.
+     */
+    val dwellTimer: DwellTimer = dwellTimerOverride
+        ?: DwellTimer(
+            dwellDurationMs = dwellDurationMs,
+            handler = Handler(Looper.getMainLooper()),
+            callback = { enterSecondary() }
+        )
+        
     // ── Gesture state ────────────────────────────────────────────
 
     /** Current state of the gesture. */
@@ -220,12 +240,10 @@ class TouchStateMachine(
      * hysteresis (via GeometryEngine) and segment suppression.
      */
     private fun handlePrimaryMove(event: MotionEvent) {
-        // --- Distance & angle (px → dp) ---
         val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
         val distDp = GeometryEngine.pxToDp(distPx, density)
         val angleDeg = geometryEngine.angle(anchorX, anchorY, currentX, currentY)
 
-        // --- Ring resolution (with hysteresis) ---
         val newRing = geometryEngine.computeRing(distDp, currentRing)
 
         if (newRing != currentRing) {
@@ -237,9 +255,9 @@ class TouchStateMachine(
                 "(dist=${String.format("%.1f", distDp)}dp, " +
                 "angle=${String.format("%.1f", angleDeg)}°)")
             onRingChanged?.invoke(newRing)
+            dwellTimer.reset()   // ring change → dwell clock restarts
         }
 
-        // --- Segment resolution (with 50 ms suppression after ring change) ---
         val newSegment = geometryEngine.computeSegment(angleDeg)
 
         val timeSinceRingChange = event.eventTime - lastRingChangeTime
@@ -251,10 +269,9 @@ class TouchStateMachine(
                     "Segment: $previousSegment → $newSegment  " +
                     "(angle=${String.format("%.1f", angleDeg)}°)")
                 onSegmentChanged?.invoke(newSegment)
+                dwellTimer.reset()   // segment change → dwell clock restarts
             }
         } else {
-            // Suppression window active — do not update currentSegment
-            // so the first legitimate change after the window fires.
             Log.v(TAG,
                 "Segment suppressed: newSeg=$newSegment curSeg=$currentSegment " +
                 "(${timeSinceRingChange}ms < ${SEGMENT_SUPPRESSION_MS}ms since ring change)")
@@ -280,6 +297,8 @@ class TouchStateMachine(
             Log.d(TAG,
                 "Secondary escape: ${String.format("%.1f", distDp)}dp " +
                 "> ${SECONDARY_RING_MAX}dp — returning to PRIMARY")
+            // transitionTo(PRIMARY) below restarts the dwell clock for
+            // whichever segment the finger lands in.
             transitionTo(TouchState.PRIMARY)
         }
     }
@@ -294,9 +313,22 @@ class TouchStateMachine(
         if (state == newState) return
         Log.d(TAG, "$state → $newState")
         state = newState
+
+        when (newState) {
+            // Entering PRIMARY (from DOWN, or escaping SECONDARY):
+            // (re)start the dwell clock for the current segment.
+            TouchState.PRIMARY   -> dwellTimer.start()
+
+            // Finger lifted or gesture cancelled: kill the pending callback.
+            TouchState.IDLE      -> dwellTimer.cancel()
+
+            // Entering SECONDARY: the dwell callback already consumed
+            // the timer; nothing to do here.
+            TouchState.SECONDARY -> { /* dwell callback already fired */ }
+        }
+
         onStateChanged?.invoke(newState)
     }
-
     /**
      * Three-state lifecycle for the radial gesture.
      *

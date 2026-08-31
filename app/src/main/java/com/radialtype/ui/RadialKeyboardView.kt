@@ -10,6 +10,7 @@ import android.view.View
 import com.radialtype.engine.GeometryEngine
 import com.radialtype.engine.TouchStateMachine
 import com.radialtype.engine.TouchStateMachine.TouchState
+import com.radialtype.haptics.HapticController
 
 /**
  * The transparent surface that hosts all radial gesture input.
@@ -33,24 +34,29 @@ class RadialKeyboardView(
         private const val TAG = "RadialKeyboardView"
     }
 
-    /**
-     * When true, [onDraw] paints a faint overlay plus ring boundaries
-     * and a finger-trace line for visual debugging.
-     * Set to false for production (fully transparent).
-     */
     var debugMode: Boolean = true
 
     /**
-     * Touch state machine that processes all gesture events.
-     * GeometryEngine is injected and density is supplied so that
-     * px→dp conversion happens inside the state machine.
+     * Haptics provider (Module 6). Toggle via [haptics.setEnabled].
      */
-    private val touchStateMachine = TouchStateMachine(
+    val haptics = HapticController(context)
+
+    /** Tracks the previous state so we only buzz on PRIMARY ↔ SECONDARY. */
+    private var lastHapticState: TouchState = TouchState.IDLE
+
+    private val touchStateMachine: TouchStateMachine = TouchStateMachine(
         geometryEngine = GeometryEngine(),
         density = context.resources.displayMetrics.density
     ).apply {
         onStateChanged = { newState ->
             Log.d(TAG, "State → $newState")
+            // Mode-change haptic: only for PRIMARY ↔ SECONDARY transitions
+            // (either direction). PRIMARY→IDLE and IDLE→PRIMARY are silent —
+            // the segment/ring tick already covers finger-down feedback.
+            val relevant = (lastHapticState == TouchState.PRIMARY && newState == TouchState.SECONDARY) ||
+                           (lastHapticState == TouchState.SECONDARY && newState == TouchState.PRIMARY)
+            if (relevant) haptics.pulseModeChange()
+            lastHapticState = newState
             invalidate()
         }
         onPositionChanged = {
@@ -61,9 +67,16 @@ class RadialKeyboardView(
         }
         onRingChanged = { ring ->
             Log.d(TAG, "Ring changed → $ring")
+            // Only pulse on real INNER ↔ OUTER crossings, not on entering
+            // or leaving the keyboard area (NONE).
+            val prev = previousRing   // ← was: touchStateMachine.previousRing
+            if (prev != GeometryEngine.Ring.NONE && ring != GeometryEngine.Ring.NONE) {
+                haptics.pulseRingChange()
+            }
         }
         onSegmentChanged = { segment ->
             Log.d(TAG, "Segment changed → $segment")
+            haptics.pulseSegmentChange(this@RadialKeyboardView)
         }
     }
 
