@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.RadialType" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Minimal theme; the keyboard view itself renders with no theme -->
+    </style>
+</resources>

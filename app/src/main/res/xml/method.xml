@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Input method subtype declaration.
+  - imeSubtypeLocale: tells the system this keyboard supports en-US
+  - imeSubtypeMode: "keyboard" (as opposed to "voice")
+  The system uses this to show the keyboard in the IME picker and
+  to match subtypes when switching between input methods.
+-->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android">
+    <subtype
+        android:label="@string/subtype_en_US"
+        android:imeSubtypeLocale="en_US"
+        android:imeSubtypeMode="keyboard" />
+</input-method>

@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">RadialType</string>
+    <string name="subtype_en_US">English (US)</string>
+    <string name="settings_intro">To use RadialType:\n\n1. Tap "Enable Keyboard" below and toggle RadialType on.\n2. Tap "Switch Keyboard" and select RadialType as your input method.</string>
+    <string name="btn_enable">Enable Keyboard</string>
+    <string name="btn_switch">Switch Keyboard</string>
+</resources>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.RadialType">
+
+        <!--
+          Settings landing page. Uses standard LAUNCHER intent so it
+          appears in the app drawer. Guides users through IME activation.
+        -->
+        <activity
+            android:name=".settings.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The IME service itself.
+          - android:permission="android.permission.BIND_INPUT_METHOD":
+            Only the system can bind to this service. This is mandatory
+            for all IMEs and prevents other apps from hijacking the connection.
+          - The intent-filter action "android.view.InputMethod" tells the
+            system this service is an input method.
+          - The meta-data tag links the method.xml config file which declares
+            supported subtypes (locale, mode).
+        -->
+        <service
+            android:name=".RadialTypeIME"
+            android:exported="false"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
+    </application>
+
+</manifest>
