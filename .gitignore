@@ -2,6 +2,9 @@
 .gradle/
 build/
 
+LICENSE
+README.md
+
 # Local configuration (machine-specific SDK path)
 local.properties
 
