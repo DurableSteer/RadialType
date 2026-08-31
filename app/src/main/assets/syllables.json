@@ -1,0 +1,18 @@
+{
+  "T": ["TH", "TR", "TE", "TO", "TI", "TA", "TU", "TW"],
+  "N": ["ND", "NG", "NE", "NO", "NA", "NI", "NT", "NS"],
+  "S": ["ST", "SE", "SO", "SA", "SI", "SU", "SH", "SP"],
+  "R": ["RE", "RA", "RO", "RI", "RU", "RD", "RS", "RL"],
+  "H": ["HE", "HA", "HI", "HO", "HU", "HM", "HW", "HN"],
+  "L": ["LE", "LA", "LI", "LO", "LU", "LL", "LD", "LF"],
+  "D": ["DE", "DA", "DO", "DI", "DU", "DS", "DR", "DW"],
+  "C": ["CO", "CA", "CE", "CI", "CU", "CR", "CL", "CW"],
+  "A": ["AN", "AT", "AL", "AR", "AD", "AC", "AM", "AB"],
+  "E": ["ER", "EN", "ES", "EL", "ED", "EM", "EV", "EC"],
+  "I": ["IN", "IT", "IS", "IC", "IR", "IL", "IO", "ID"],
+  "O": ["ON", "OF", "OR", "OT", "OM", "OB", "OC", "OD"],
+  "U": ["UN", "UP", "US", "UT", "UM", "UR", "UB", "UD"],
+  "W": ["WA", "WE", "WI", "WH", "WO", "WR", "WS", "WY"],
+  "F": ["FO", "FR", "FI", "FA", "FE", "FL", "FU", "FY"],
+  "G": ["GR", "GA", "GE", "GO", "GI", "GU", "GL", "GS"]
+}

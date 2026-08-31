@@ -34,6 +34,11 @@ import com.radialtype.engine.GeometryEngine.Ring
  * position where dwell triggered) is monitored. If it exceeds
  * [SECONDARY_RING_MAX] dp, the machine transitions back to PRIMARY.
  *
+ * Secondary segment tracking:
+ * While in SECONDARY, the segment is re-resolved around
+ * [secondaryAnchorX/Y] on every MOVE (angular only — the secondary
+ * menu is a flat ring), so the selection label can follow the finger.
+ *
  * @param geometryEngine Injected for testability; defaults to a new instance.
  * @param density Screen density for px→dp conversion. Must be set by the
  *                hosting view before the first ACTION_MOVE (typically
@@ -278,13 +283,17 @@ class TouchStateMachine(
         }
     }
 
-    // ── SECONDARY-state escape ───────────────────────────────────
+    // ── SECONDARY-state escape & segment tracking ────────────────
 
     /**
-     * Processes a MOVE while in SECONDARY state: checks whether the
-     * finger has escaped the secondary ring. If the distance from
-     * [secondaryAnchorX/Y] exceeds [SECONDARY_RING_MAX] dp, the
-     * machine transitions back to PRIMARY.
+     * Processes a MOVE while in SECONDARY state:
+     * 1. Checks whether the finger has escaped the secondary ring
+     *    (distance from [secondaryAnchorX/Y] > [SECONDARY_RING_MAX] dp)
+     *    and, if so, transitions back to PRIMARY.
+     * 2. Otherwise, re-resolves the segment relative to the secondary
+     *    anchor so the SECONDARY selection (syllables, Module 9) can
+     *    follow the finger. Angular-only — the secondary menu is not
+     *    split into concentric rings.
      */
     private fun handleSecondaryMove(event: MotionEvent) {
         val distPx = geometryEngine.distance(
@@ -300,6 +309,23 @@ class TouchStateMachine(
             // transitionTo(PRIMARY) below restarts the dwell clock for
             // whichever segment the finger lands in.
             transitionTo(TouchState.PRIMARY)
+            return
+        }
+
+        // Secondary segment tracking: angle measured from the point
+        // where dwell triggered, so segment 0 is "east" of the tap.
+        val angleDeg = geometryEngine.angle(
+            secondaryAnchorX, secondaryAnchorY,
+            currentX, currentY
+        )
+        val newSegment = geometryEngine.computeSegment(angleDeg)
+        if (newSegment != currentSegment) {
+            previousSegment = currentSegment
+            currentSegment = newSegment
+            Log.d(TAG,
+                "Secondary segment: $previousSegment → $newSegment  " +
+                "(angle=${String.format("%.1f", angleDeg)}°)")
+            onSegmentChanged?.invoke(newSegment)
         }
     }
 

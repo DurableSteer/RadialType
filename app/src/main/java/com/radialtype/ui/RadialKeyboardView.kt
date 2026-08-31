@@ -11,14 +11,21 @@ import com.radialtype.engine.GeometryEngine
 import com.radialtype.engine.TouchStateMachine
 import com.radialtype.engine.TouchStateMachine.TouchState
 import com.radialtype.haptics.HapticController
+import com.radialtype.text.CharacterMap
+import com.radialtype.text.SelectionTracker
+import com.radialtype.text.SyllableProvider
 
 /**
  * The transparent surface that hosts all radial gesture input.
  *
- * As of Module 5, touch events are delegated to [TouchStateMachine],
- * which integrates with [GeometryEngine] to resolve the finger's ring
- * and segment on every MOVE. The view renders a lightweight debug
- * overlay (ring circles + finger trace line) when [debugMode] is true.
+ * Touch events are delegated to [TouchStateMachine], which integrates
+ * with [GeometryEngine] to resolve the finger's ring and segment on
+ * every MOVE (Module 5) and drives dwell-triggered secondary menus
+ * (Module 7). The resolved selection is tracked by [selectionTracker]
+ * (Modules 8–9) and exposed via [currentLabel] for the renderer
+ * (Module 10). The view renders a lightweight debug overlay (ring
+ * circles + finger trace + current character label) when [debugMode]
+ * is true.
  *
  * Lifecycle: created by [com.radialtype.RadialTypeIME.onCreateInputView],
  * which returns this view to the framework.
@@ -44,6 +51,15 @@ class RadialKeyboardView(
     /** Tracks the previous state so we only buzz on PRIMARY ↔ SECONDARY. */
     private var lastHapticState: TouchState = TouchState.IDLE
 
+    /**
+     * Character layout + selection state (Modules 8 & 9). The view keeps
+     * these in sync with the state machine and queries the label on
+     * every invalidate for the renderer.
+     */
+    private val characterMap = CharacterMap(context)
+    private val syllableProvider = SyllableProvider(context)
+    val selectionTracker = SelectionTracker(characterMap, syllableProvider)
+
     private val touchStateMachine: TouchStateMachine = TouchStateMachine(
         geometryEngine = GeometryEngine(),
         density = context.resources.displayMetrics.density
@@ -57,19 +73,28 @@ class RadialKeyboardView(
                            (lastHapticState == TouchState.SECONDARY && newState == TouchState.PRIMARY)
             if (relevant) haptics.pulseModeChange()
             lastHapticState = newState
+
+            // Keep the selection tracker in sync with the state machine.
+            // The order matters: geometry first (so a fresh DOWN resets
+            // ring/segment to NONE/−1), then the state transition.
+            selectionTracker.update(currentRing, currentSegment)
+            selectionTracker.updateState(newState)
             invalidate()
         }
         onPositionChanged = {
+            // Mirror the machine's resolved ring/segment into the tracker
+            // on every MOVE so the label is always current.
+            selectionTracker.update(currentRing, currentSegment)
             invalidate()
         }
         onCommit = {
-            Log.d(TAG, "Commit (seg=$currentSegment ring=$currentRing)")
+            Log.d(TAG, "Commit (seg=$currentSegment ring=$currentRing label=${selectionTracker.currentLabel()})")
         }
         onRingChanged = { ring ->
             Log.d(TAG, "Ring changed → $ring")
             // Only pulse on real INNER ↔ OUTER crossings, not on entering
             // or leaving the keyboard area (NONE).
-            val prev = previousRing   // ← was: touchStateMachine.previousRing
+            val prev = previousRing
             if (prev != GeometryEngine.Ring.NONE && ring != GeometryEngine.Ring.NONE) {
                 haptics.pulseRingChange()
             }
@@ -77,6 +102,10 @@ class RadialKeyboardView(
         onSegmentChanged = { segment ->
             Log.d(TAG, "Segment changed → $segment")
             haptics.pulseSegmentChange(this@RadialKeyboardView)
+            // Segment changes are already reflected on the next
+            // onPositionChanged, but sync eagerly so the label never
+            // lags a frame behind the haptic tick.
+            selectionTracker.update(currentRing, currentSegment)
         }
     }
 
@@ -94,6 +123,14 @@ class RadialKeyboardView(
         strokeWidth = 2f
     }
 
+    /** Label paint for the debug character readout (Module 10 replaces this). */
+    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        textSize = 48f
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+    }
+
     init {
         // Fully transparent — the host app shows through.
         setBackgroundColor(Color.TRANSPARENT)
@@ -105,13 +142,25 @@ class RadialKeyboardView(
     }
 
     override fun onDraw(canvas: Canvas) {
-        if (!debugMode) return
+        // ── Debug overlay ─────────────────────────────────────────
+        if (debugMode) {
+            // Faint background tint to confirm the view bounds.
+            canvas.drawColor(Color.argb(10, 109, 74, 255))
 
-        // Faint background tint to confirm the view bounds.
-        canvas.drawColor(Color.argb(10, 109, 74, 255))
+            if (touchStateMachine.state != TouchState.IDLE) {
+                drawDebugOverlay(canvas)
+            }
+        }
 
-        if (touchStateMachine.state == TouchState.IDLE) return
+        // ── Character label (Module 10 renderer consumes this) ────
+        val label = selectionTracker.currentLabel()
+        if (label.isNotEmpty()) {
+            labelPaint.color = Color.argb(230, 255, 255, 255)
+            canvas.drawText(label, currentX, currentY - 160f, labelPaint)
+        }
+    }
 
+    private fun drawDebugOverlay(canvas: Canvas) {
         // ── Ring boundaries (dp → px) ──────────────────────────────
         val d = resources.displayMetrics.density
 
