@@ -25,6 +25,18 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        
+        // Step 0: grant the overlay permission (required for the
+        // floating pad + fullscreen render layer).
+        findViewById<android.widget.Button>(R.id.btnOverlay).setOnClickListener {
+            if (!android.provider.Settings.canDrawOverlays(this)) {
+                val intent = Intent(
+                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+            }
+        }
 
         // Step 1: Open system keyboard management settings so the user
         // can toggle RadialType on.

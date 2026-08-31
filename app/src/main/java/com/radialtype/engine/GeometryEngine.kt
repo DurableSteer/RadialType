@@ -6,18 +6,27 @@ import kotlin.math.hypot
 /**
  * Pure-math engine for radial keyboard geometry.
  *
- * Defines two concentric rings around the touch anchor:
+ * Defines a deadzone and two concentric rings around the touch anchor.
+ * The same geometry is used for both PRIMARY and SECONDARY menus —
+ * the secondary menu is simply re-centred on the dwell point.
  *
  * ```
  *         ┌─────────────────────────┐
- *         │    OUTER RING (8 seg)   │  ← R1_MAX .. R2_MAX
+ *         │    OUTER RING (8 seg)   │  ← INNER_RADIUS_MAX .. OUTER_RADIUS_MAX
  *         │  ┌───────────────────┐  │
- *         │  │   INNER RING       │  │  ← R1_MIN .. R1_MAX
+ *         │  │   INNER RING       │  │  ← DEAD_ZONE_RADIUS .. INNER_RADIUS_MAX
  *         │  │   (8 segments)     │  │
- *         │  │       • anchor    │  │
+ *         │  │    ░ deadzone ░    │  │  ← 0 .. DEAD_ZONE_RADIUS (unrendered,
+ *         │  │       • anchor    │  │     no selection, no haptics)
  *         │  └───────────────────┘  │
  *         └─────────────────────────┘
  * ```
+ *
+ * **Overshoot clamping:** positions beyond [OUTER_RADIUS_MAX] are NOT
+ * rejected — they resolve to [Ring.OUTER]. The selected key is the
+ * outer-ring segment on the ray from the anchor through the touch
+ * point, so overshooting the keyboard can never deselect the finger.
+ * [Ring.NONE] is produced only by the center deadzone.
  *
  * All distance constants are in **dp**. Callers must convert pixel
  * coordinates (from MotionEvent) to dp using [pxToDp] before invoking
@@ -28,13 +37,13 @@ import kotlin.math.hypot
  */
 class GeometryEngine {
 
-    /** Inner ring starts at the anchor point. */
-    val innerRadiusMin: Float = INNER_RADIUS_MIN
+    /** Deadzone edge — inner ring begins here. */
+    val deadZoneRadius: Float = DEAD_ZONE_RADIUS
 
     /** Inner ring ends / outer ring begins (boundary has hysteresis). */
     val innerRadiusMax: Float = INNER_RADIUS_MAX
 
-    /** Outer ring ends; beyond this is Ring.NONE (finger exited). */
+    /** Outer ring ends; beyond this, positions clamp to OUTER. */
     val outerRadiusMax: Float = OUTER_RADIUS_MAX
 
     /** Number of angular segments per ring (45° each). */
@@ -42,15 +51,20 @@ class GeometryEngine {
 
     /**
      * Identifies which ring a finger position belongs to, applying
-     * hysteresis to prevent rapid oscillation when the finger hovers
-     * near [INNER_RADIUS_MAX].
+     * hysteresis near both boundaries: [DEAD_ZONE_RADIUS] (center
+     * deadzone) and [INNER_RADIUS_MAX] (inner/outer boundary).
+     *
+     * Used for BOTH primary and secondary ring tracking — the secondary
+     * menu shares the same geometry, just centred on a different anchor.
      *
      * Hysteresis logic:
-     * - If the finger was in [Ring.INNER] and drifts slightly past
-     *   [INNER_RADIUS_MAX] (up to +[HYSTERESIS]), it stays INNER.
-     * - If the finger was in [Ring.OUTER] and drifts slightly below
-     *   [INNER_RADIUS_MAX] (down to −[HYSTERESIS]), it stays OUTER.
-     * - This deadband prevents flickering at the ring boundary.
+     * - Inside the deadzone band (within [HYSTERESIS] of [DEAD_ZONE_RADIUS]):
+     *   a finger already in INNER/OUTER lingers there; with no prior
+     *   state the gesture stays [Ring.NONE] until it clearly exits.
+     * - Near [INNER_RADIUS_MAX], INNER/OUTER assignments retain the
+     *   previous ring within a ±[HYSTERESIS] deadband.
+     * - Beyond [OUTER_RADIUS_MAX]: clamped to [Ring.OUTER] (overshoot
+     *   keeps the outer-ring selection along the current ray).
      *
      * @param distanceFromCenter Radial distance from anchor, in dp.
      * @param previousRing The ring classification from the previous
@@ -61,13 +75,31 @@ class GeometryEngine {
         distanceFromCenter: Float,
         previousRing: Ring
     ): Ring {
-        // Finger is outside the entire keyboard area
-        if (distanceFromCenter > OUTER_RADIUS_MAX) return Ring.NONE
+        // Overshoot beyond the outer edge: clamp to the outer ring.
+        // The segment along the anchor→finger ray remains selected.
+        if (distanceFromCenter > OUTER_RADIUS_MAX) return Ring.OUTER
 
-        // Hysteresis band around the inner/outer boundary
+        // ── Deadzone boundary (0 .. DEAD_ZONE_RADIUS) ─────────────
+        val deadLower = DEAD_ZONE_RADIUS - HYSTERESIS   // e.g. 52 dp
+        val deadUpper = DEAD_ZONE_RADIUS + HYSTERESIS   // e.g. 68 dp
+
+        if (distanceFromCenter < deadLower) return Ring.NONE
+
+        if (distanceFromCenter <= deadUpper) {
+            // Inside the deadzone hysteresis band — retain previous
+            // state. With no prior state, remain unselected until the
+            // finger clearly exits the deadzone.
+            return when (previousRing) {
+                Ring.INNER -> Ring.INNER
+                Ring.OUTER -> Ring.OUTER
+                Ring.NONE  -> Ring.NONE
+            }
+        }
+
+        // ── Inner/outer boundary (DEAD_ZONE_RADIUS .. OUTER_RADIUS_MAX) ──
         val boundary = INNER_RADIUS_MAX
-        val lowerHysteresis = boundary - HYSTERESIS   // e.g. 52 dp
-        val upperHysteresis = boundary + HYSTERESIS    // e.g. 68 dp
+        val lowerHysteresis = boundary - HYSTERESIS   // e.g. 112 dp
+        val upperHysteresis = boundary + HYSTERESIS   // e.g. 128 dp
 
         return when {
             // Clearly in the inner ring
@@ -157,17 +189,25 @@ class GeometryEngine {
      */
     fun ringWithoutHysteresis(distanceFromCenter: Float): Ring {
         return when {
-            distanceFromCenter > OUTER_RADIUS_MAX -> Ring.NONE
-            distanceFromCenter > INNER_RADIUS_MAX -> Ring.OUTER
+            distanceFromCenter < DEAD_ZONE_RADIUS -> Ring.NONE
+            distanceFromCenter > INNER_RADIUS_MAX -> Ring.OUTER  // includes overshoot clamp
             else -> Ring.INNER
         }
     }
 
     companion object {
         // ── Ring radii (dp) ──────────────────────────────────────
-        const val INNER_RADIUS_MIN = 0f
-        const val INNER_RADIUS_MAX = 60f
-        const val OUTER_RADIUS_MAX = 120f
+        /** Center deadzone — gestures here select nothing and stay silent. */
+        const val DEAD_ZONE_RADIUS = 60f
+
+        /** Inner ring starts at the deadzone edge. */
+        const val INNER_RADIUS_MIN = DEAD_ZONE_RADIUS
+
+        /** Inner ring ends / outer ring begins (boundary has hysteresis). */
+        const val INNER_RADIUS_MAX = 120f
+
+        /** Outer ring ends; beyond this, positions clamp to OUTER. */
+        const val OUTER_RADIUS_MAX = 180f
 
         // ── Segment configuration ────────────────────────────────
         const val SEGMENT_COUNT = 8
@@ -179,12 +219,6 @@ class GeometryEngine {
          * Converts a pixel distance to dp using the screen density.
          * Call this before passing MotionEvent-derived distances to
          * [computeRing], since all ring constants are in dp.
-         *
-         * Typical usage from a View:
-         * ```
-         * val density = resources.displayMetrics.density
-         * val distDp = GeometryEngine.pxToDp(distPx, density)
-         * ```
          */
         fun pxToDp(px: Float, density: Float): Float = px / density
     }
@@ -192,9 +226,10 @@ class GeometryEngine {
     /**
      * Represents which concentric ring the finger currently occupies.
      *
-     * [NONE] means the finger is outside the keyboard area entirely
-     * (beyond [OUTER_RADIUS_MAX]) — the gesture should be treated as
-     * cancelled or ignored.
+     * [NONE] means the finger is inside the center deadzone —
+     * the gesture should be treated as cancelled or ignored.
+     * Overshoot beyond the outer edge no longer produces [NONE];
+     * it clamps to [Ring.OUTER].
      */
     enum class Ring {
         INNER,

@@ -1,0 +1,149 @@
+package com.radialtype.ui
+
+import android.content.Context
+import android.graphics.PixelFormat
+import android.util.Log
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.WindowManager
+import com.radialtype.engine.TouchStateMachine.TouchState
+import com.radialtype.text.CharacterMap
+import com.radialtype.text.SyllableProvider
+
+/**
+ * Owns the two-window setup that makes RadialType work while leaving the
+ * host app fully touchable:
+ *
+ *  1. [padView]   — a SMALL touchable window positioned exactly over the
+ *     ergonomic ovoid. Only touches beginning inside it start a gesture.
+ *     Everything outside its bounds physically belongs to the app below.
+ *
+ *  2. [overlayView] — a NON-touchable rendering window, added ONLY while
+ *     a gesture is active and removed as soon as the gesture ends. No
+ *     window ever floats over the host app between gestures, so the
+ *     system's untrusted-touch protections never come into play during
+ *     normal app interaction.
+ */
+class RadialOverlayController(private val context: Context) {
+
+    companion object {
+        private const val ZONE_CENTER_X_FROM_RIGHT = 0.45f
+        private const val ZONE_CENTER_Y_FROM_BOTTOM = 0.33f
+        private const val ZONE_WIDTH_CM = 3.0f
+        private const val ZONE_HEIGHT_CM = 4.5f
+    }
+
+    private val wm =
+        context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+    private val characterMap = CharacterMap(context)
+    private val syllableProvider = SyllableProvider(context)
+
+    val renderer = RadialRenderer(context, characterMap, syllableProvider)
+
+    private val overlayView = RadialOverlayView(context, renderer)
+    val padView = RadialKeyboardView(context)
+
+    private var padAdded = false
+    private var overlayAdded = false
+
+    init {
+        padView.onRenderFrame = { data -> onFrame(data) }
+        renderer.debugMode = true
+    }
+
+    /**
+     * Central frame handler, driven by the pad. The fullscreen render
+     * layer only exists while a gesture is in flight — the moment the
+     * state machine returns to IDLE the window is removed entirely, so
+     * nothing overlays the host app between gestures.
+     */
+    private fun onFrame(data: RadialRenderData) {
+        val active = data.state != com.radialtype.engine.TouchStateMachine.TouchState.IDLE
+        if (active && !overlayAdded) addOverlayWindow()
+        overlayView.setData(data)
+        if (data.state == com.radialtype.engine.TouchStateMachine.TouchState.IDLE && overlayAdded) {
+            removeOverlayWindow()
+        }
+    }
+
+    fun show() {
+        if (padAdded) return
+        if (!android.provider.Settings.canDrawOverlays(context)) {
+            Log.w("RadialOverlay", "Overlay permission missing")
+            return
+        }
+
+        val dm = context.resources.displayMetrics
+        val screenW = dm.widthPixels.toFloat()
+        val screenH = dm.heightPixels.toFloat()
+
+        val rxPx = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_MM, ZONE_WIDTH_CM * 10f / 2f, dm
+        )
+        val ryPx = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_MM, ZONE_HEIGHT_CM * 10f / 2f, dm
+        )
+
+        val zoneCX = screenW * (1f - ZONE_CENTER_X_FROM_RIGHT)
+        val zoneCY = screenH * (1f - ZONE_CENTER_Y_FROM_BOTTOM)
+
+        renderer.setTouchZone(zoneCX, zoneCY, rxPx, ryPx)
+
+        padView.configureZone(rxPx, ryPx)
+        padView.screenOffsetX = zoneCX - rxPx
+        padView.screenOffsetY = zoneCY - ryPx
+
+        // Only the small touchable pad is persistent.
+        val padParams = WindowManager.LayoutParams(
+            (rxPx * 2f).toInt(),
+            (ryPx * 2f).toInt(),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            android.graphics.PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            x = (zoneCX - rxPx).toInt()
+            y = (zoneCY - ryPx).toInt()
+        }
+        wm.addView(padView, padParams)
+        padAdded = true
+    }
+
+    /** Lazily adds the fullscreen render window when a gesture starts. */
+    private fun addOverlayWindow() {
+        if (overlayAdded) return
+        val overlayParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            android.graphics.PixelFormat.TRANSLUCENT
+        )
+        wm.addView(overlayView, overlayParams)
+        overlayAdded = true
+    }
+
+    private fun removeOverlayWindow() {
+        if (!overlayAdded) return
+        runCatching { wm.removeView(overlayView) }
+        overlayAdded = false
+    }
+
+    private fun hidePad() {
+        if (!padAdded) return
+        runCatching { wm.removeView(padView) }
+        padAdded = false
+    }
+
+    fun hide() {
+        removeOverlayWindow()
+        if (padAdded) {
+            runCatching { wm.removeView(padView) }
+            padAdded = false
+        }
+    }
+
+    fun release() = hide()
+}

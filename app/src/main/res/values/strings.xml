@@ -4,4 +4,5 @@
     <string name="settings_intro">To use RadialType:\n\n1. Tap "Enable Keyboard" below and toggle RadialType on.\n2. Tap "Switch Keyboard" and select RadialType as your input method.</string>
     <string name="btn_enable">Enable Keyboard</string>
     <string name="btn_switch">Switch Keyboard</string>
+    <string name="btn_overlay">Allow Drawing Over Other Apps</string>
 </resources>

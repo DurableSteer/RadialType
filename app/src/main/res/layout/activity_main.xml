@@ -25,5 +25,12 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/btn_switch" />
+        
+    <Button
+        android:id="@+id/btnOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_overlay"
+        android:layout_marginBottom="16dp" />
 
 </LinearLayout>

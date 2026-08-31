@@ -2,32 +2,44 @@ package com.radialtype.text
 
 import android.content.Context
 import android.util.Log
+import com.radialtype.engine.GeometryEngine.Ring
 
 /**
  * Module 9 — Loads and serves two-letter syllable data for the
- * SECONDARY ring, ranked by English letter-pair (bigram) frequency.
+ * SECONDARY menu, ranked by English letter-pair (bigram) frequency.
  *
  * Data source: `assets/syllables.json`, keyed by primary character:
  * ```json
- * { "T": ["TH", "TR", "TE", "TO", "TI", "TA", "TU", "TN"], ... }
+ * { "T": ["TH", "TR", "TE", "TO", "TI", "TA", "TU", "TW"], ... }
  * ```
  *
- * Spatial arrangement: frequency rank 0 is placed at the most
- * ergonomic segment ([ERGONOMIC_ORDER][0] = segment 6, due "north" /
- * top of the ring — closest to a thumb's natural resting arc), then
- * ranks fan out toward the periphery. Segments not listed in the JSON
- * for a character resolve to "".
+ * Spatial arrangement — TWO secondary rings:
+ * The frequency-ranked list is split: the INNER secondary ring holds
+ * ranks 0–3, the OUTER ring holds ranks 4–7. Within each ring, the
+ * ergonomic rank→segment mapping puts the most frequent entries at the
+ * most accessible segments (top of the ring first, fanning out).
+ * Segments that hold no entry for a character resolve to "".
  */
 class SyllableProvider(context: Context? = null) {
 
     companion object {
         /**
-         * Maps frequency rank → segment index. Rank 0 (most frequent)
-         * goes to segment 6 (270°, top). Neighbors of the top segment
-         * (7 = NE, 5 = NW) come next, then progressively less
-         * accessible positions.
+         * Maps frequency rank → segment index for a full 8-slot ring
+         * (rank 0 = most frequent → segment 6, due "north").
          */
         val ERGONOMIC_ORDER = intArrayOf(6, 0, 7, 5, 1, 4, 2, 3)
+
+        /**
+         * Segments holding the INNER secondary ring (syllable ranks 0–3),
+         * in ergonomic order.
+         */
+        val SECONDARY_INNER_SEGMENTS = intArrayOf(6, 0, 7, 5)
+
+        /**
+         * Segments holding the OUTER secondary ring (ranks 4–7),
+         * continuing the ergonomic fan-out.
+         */
+        val SECONDARY_OUTER_SEGMENTS = intArrayOf(1, 4, 2, 3)
 
         const val SYLLABLES_PER_CHAR = 8
 
@@ -40,14 +52,14 @@ class SyllableProvider(context: Context? = null) {
             "H": ["HE", "HA", "HI", "HO", "HU", "HM", "HW", "HN"],
             "L": ["LE", "LA", "LI", "LO", "LU", "LL", "LD", "LF"],
             "D": ["DE", "DA", "DO", "DI", "DU", "DS", "DR", "DW"],
-            "C": ["CO", "CA", "CE", "CI", "CU", "CC", "CR", "CL"],
+            "C": ["CO", "CA", "CE", "CI", "CU", "CR", "CL", "CW"],
             "A": ["AN", "AT", "AL", "AR", "AD", "AC", "AM", "AB"],
             "E": ["ER", "EN", "ES", "EL", "ED", "EM", "EV", "EC"],
             "I": ["IN", "IT", "IS", "IC", "IR", "IL", "IO", "ID"],
             "O": ["ON", "OF", "OR", "OT", "OM", "OB", "OC", "OD"],
             "U": ["UN", "UP", "US", "UT", "UM", "UR", "UB", "UD"],
             "W": ["WA", "WE", "WI", "WH", "WO", "WR", "WS", "WY"],
-            "F": ["FO", "FR", "FI", "FA", "FE", "FL", "FU", "FI"],
+            "F": ["FO", "FR", "FI", "FA", "FE", "FL", "FU", "FY"],
             "G": ["GR", "GA", "GE", "GO", "GI", "GU", "GL", "GS"]
         }"""
     }
@@ -107,19 +119,31 @@ class SyllableProvider(context: Context? = null) {
     }
 
     /**
-     * Returns the syllable assigned to the given secondary-ring segment.
+     * Returns the syllable assigned to the given secondary ring/segment.
      *
      * @param primaryChar The character that was dwelled on.
-     * @param segment     Secondary-ring segment index 0–7 (−1 → "").
+     * @param ring        Secondary ring — INNER (ranks 0–3) or OUTER
+     *                    (ranks 4–7). NONE → "".
+     * @param segment     Secondary-ring segment index 0–7.
      * @return The syllable string, or "" if none is mapped for this
-     *         segment (callers fall back to the primary char).
+     *         slot (callers fall back to the primary char).
      */
-    fun getSyllable(primaryChar: String, segment: Int): String {
+    fun getSyllable(primaryChar: String, ring: Ring, segment: Int): String {
         if (primaryChar.isEmpty() || segment !in 0 until SYLLABLES_PER_CHAR) return ""
         val list = getSyllables(primaryChar)
         if (list.isEmpty()) return ""
-        val rank = ERGONOMIC_ORDER.indexOf(segment)
-        if (rank < 0 || rank >= list.size) return ""
+
+        val segments: IntArray
+        val ringOffset: Int
+        when (ring) {
+            Ring.INNER -> { segments = SECONDARY_INNER_SEGMENTS; ringOffset = 0 }
+            Ring.OUTER -> { segments = SECONDARY_OUTER_SEGMENTS; ringOffset = SECONDARY_INNER_SEGMENTS.size }
+            Ring.NONE  -> return ""
+        }
+        val posInRing = segments.indexOf(segment)
+        if (posInRing < 0) return ""
+        val rank = ringOffset + posInRing
+        if (rank >= list.size) return ""
         return list[rank]
     }
 }

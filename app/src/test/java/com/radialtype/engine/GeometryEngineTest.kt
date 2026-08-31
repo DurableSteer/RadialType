@@ -8,8 +8,12 @@ import org.junit.Test
 /**
  * Comprehensive unit tests for [GeometryEngine].
  *
- * Covers: distance, angle normalization, ring classification with
- * hysteresis, segment mapping at boundaries, and 360°→0° wraparound.
+ * Constants under test (all dp):
+ *   DEAD_ZONE_RADIUS  = 60   inner ring: 60..120   outer ring: 120..180
+ *   HYSTERESIS        = 8    (bands: 52–68 and 112–128)
+ *
+ * Overshoot beyond 180 clamps to OUTER — NONE comes only from the
+ * center deadzone.
  */
 class GeometryEngineTest {
 
@@ -41,7 +45,6 @@ class GeometryEngineTest {
 
     @Test
     fun `distance computes diagonal via Pythagorean theorem`() {
-        // 3-4-5 triangle
         assertEquals(5f, engine.distance(0f, 0f, 3f, 4f), TOLERANCE)
     }
 
@@ -63,13 +66,11 @@ class GeometryEngineTest {
 
     @Test
     fun `angle returns 0 for due east`() {
-        // Anchor at origin, finger to the right (+X)
         assertEquals(0f, engine.angle(0f, 0f, 100f, 0f), ANGLE_TOLERANCE)
     }
 
     @Test
     fun `angle returns 90 for due south`() {
-        // On screen, +Y is downward → south = 90°
         assertEquals(90f, engine.angle(0f, 0f, 0f, 100f), ANGLE_TOLERANCE)
     }
 
@@ -80,19 +81,16 @@ class GeometryEngineTest {
 
     @Test
     fun `angle returns 270 for due north`() {
-        // -Y is upward on screen → north = 270°
         assertEquals(270f, engine.angle(0f, 0f, 0f, -100f), ANGLE_TOLERANCE)
     }
 
     @Test
     fun `angle normalizes negative atan2 result to 0-360`() {
-        // atan2(-1, 1) ≈ -45°, should normalize to 315°
         assertEquals(315f, engine.angle(0f, 0f, 100f, -100f), ANGLE_TOLERANCE)
     }
 
     @Test
     fun `angle returns 0 when anchor equals current point`() {
-        // atan2(0, 0) = 0 in Java/Kotlin Math
         assertEquals(0f, engine.angle(5f, 5f, 5f, 5f), ANGLE_TOLERANCE)
     }
 
@@ -102,136 +100,173 @@ class GeometryEngineTest {
     }
 
     // ════════════════════════════════════════════════════════════
-    //  COMPUTE RING — clear zones (no hysteresis involvement)
+    //  COMPUTE RING — clear zones
     // ════════════════════════════════════════════════════════════
 
     @Test
-    fun `ring returns INNER at center`() {
-        assertEquals(Ring.INNER, engine.computeRing(0f, Ring.NONE))
+    fun `ring returns NONE at center`() {
+        assertEquals(Ring.NONE, engine.computeRing(0f, Ring.NONE))
+    }
+
+    @Test
+    fun `ring returns NONE well within deadzone`() {
+        assertEquals(Ring.NONE, engine.computeRing(30f, Ring.NONE))
+    }
+
+    @Test
+    fun `ring returns NONE just below deadzone lower hysteresis edge`() {
+        // deadLower = 60 - 8 = 52
+        assertEquals(Ring.NONE, engine.computeRing(51.9f, Ring.NONE))
+    }
+
+    @Test
+    fun `ring returns INNER just above deadzone upper hysteresis edge`() {
+        // deadUpper = 60 + 8 = 68; 68.1 is clearly inner territory
+        assertEquals(Ring.INNER, engine.computeRing(68.1f, Ring.NONE))
     }
 
     @Test
     fun `ring returns INNER well within inner zone`() {
-        assertEquals(Ring.INNER, engine.computeRing(30f, Ring.NONE))
+        assertEquals(Ring.INNER, engine.computeRing(90f, Ring.NONE))
     }
 
     @Test
-    fun `ring returns INNER just below lower hysteresis boundary`() {
-        // Lower hysteresis = 60 - 8 = 52
-        assertEquals(Ring.INNER, engine.computeRing(51.9f, Ring.NONE))
+    fun `ring returns INNER just below inner-outer lower hysteresis boundary`() {
+        // lower hysteresis = 120 - 8 = 112
+        assertEquals(Ring.INNER, engine.computeRing(111.9f, Ring.NONE))
     }
 
     @Test
     fun `ring returns OUTER well within outer zone`() {
-        assertEquals(Ring.OUTER, engine.computeRing(90f, Ring.NONE))
+        assertEquals(Ring.OUTER, engine.computeRing(140f, Ring.NONE))
     }
 
     @Test
     fun `ring returns OUTER just above upper hysteresis boundary`() {
-        // Upper hysteresis = 60 + 8 = 68
-        assertEquals(Ring.OUTER, engine.computeRing(68.1f, Ring.NONE))
+        // upper hysteresis = 120 + 8 = 128
+        assertEquals(Ring.OUTER, engine.computeRing(128.1f, Ring.NONE))
     }
 
     @Test
-    fun `ring returns NONE beyond outer max`() {
-        assertEquals(Ring.NONE, engine.computeRing(120.1f, Ring.NONE))
+    fun `ring clamps overshoot beyond outer max to OUTER`() {
+        assertEquals(Ring.OUTER, engine.computeRing(180.1f, Ring.NONE))
     }
 
     @Test
-    fun `ring returns NONE far beyond outer max`() {
-        assertEquals(Ring.NONE, engine.computeRing(500f, Ring.NONE))
+    fun `ring clamps far beyond outer max to OUTER`() {
+        assertEquals(Ring.OUTER, engine.computeRing(500f, Ring.NONE))
     }
 
     @Test
     fun `ring returns OUTER at exactly outer max boundary`() {
-        // 120 dp is inclusive — still in the outer ring
-        assertEquals(Ring.OUTER, engine.computeRing(120f, Ring.OUTER))
+        // 180 is not strictly greater than OUTER_RADIUS_MAX → hysteresis path
+        assertEquals(Ring.OUTER, engine.computeRing(180f, Ring.OUTER))
     }
 
     // ════════════════════════════════════════════════════════════
     //  COMPUTE RING — hysteresis behavior
     // ════════════════════════════════════════════════════════════
 
+    // ── Deadzone boundary band (52..68) ──
+
     @Test
-    fun `hysteresis keeps finger in INNER when slightly past boundary`() {
-        // Distance = 65 (past 60, within hysteresis band 52–68)
-        // Previously INNER → should stay INNER
-        assertEquals(Ring.INNER, engine.computeRing(65f, Ring.INNER))
+    fun `deadzone hysteresis keeps INNER when slightly below deadzone edge`() {
+        // 55 is in the band; previously INNER → stays INNER
+        assertEquals(Ring.INNER, engine.computeRing(55f, Ring.INNER))
     }
 
     @Test
-    fun `hysteresis keeps finger in OUTER when slightly before boundary`() {
-        // Distance = 55 (before 60, within hysteresis band 52–68)
-        // Previously OUTER → should stay OUTER
-        assertEquals(Ring.OUTER, engine.computeRing(55f, Ring.OUTER))
+    fun `deadzone hysteresis keeps OUTER when slightly above deadzone edge`() {
+        // 65 is in the band; prev OUTER → stays OUTER
+        assertEquals(Ring.OUTER, engine.computeRing(65f, Ring.OUTER))
     }
 
     @Test
-    fun `hysteresis allows transition from INNER to OUTER when past upper hysteresis`() {
-        // Distance = 68.1 (just above upper hysteresis)
-        // Previously INNER → should now switch to OUTER
-        assertEquals(Ring.OUTER, engine.computeRing(68.1f, Ring.INNER))
+    fun `deadzone with no prior state stays NONE at deadzone edge`() {
+        // 60 exactly: within band, no prior → NONE
+        assertEquals(Ring.NONE, engine.computeRing(60f, Ring.NONE))
     }
 
     @Test
-    fun `hysteresis allows transition from OUTER to INNER when below lower hysteresis`() {
-        // Distance = 51.9 (just below lower hysteresis)
-        // Previously OUTER → should now switch to INNER
-        assertEquals(Ring.INNER, engine.computeRing(51.9f, Ring.OUTER))
-    }
-
-    @Test
-    fun `hysteresis at exact boundary retains previous ring when previously INNER`() {
-        // Distance = 60 exactly (on the boundary)
-        assertEquals(Ring.INNER, engine.computeRing(60f, Ring.INNER))
-    }
-
-    @Test
-    fun `hysteresis at exact boundary retains previous ring when previously OUTER`() {
-        // Distance = 60 exactly (on the boundary)
-        assertEquals(Ring.OUTER, engine.computeRing(60f, Ring.OUTER))
-    }
-
-    @Test
-    fun `hysteresis with no prior state at boundary favors INNER`() {
-        // Distance = 60 exactly, no prior ring → defaults to INNER
-        assertEquals(Ring.INNER, engine.computeRing(60f, Ring.NONE))
-    }
-
-    @Test
-    fun `hysteresis with no prior state below boundary favors INNER`() {
-        // Distance = 55, within hysteresis, no prior → INNER (≤ boundary)
-        assertEquals(Ring.INNER, engine.computeRing(55f, Ring.NONE))
-    }
-
-    @Test
-    fun `hysteresis with no prior state above boundary favors OUTER`() {
-        // Distance = 65, within hysteresis, no prior → OUTER (> boundary)
-        assertEquals(Ring.OUTER, engine.computeRing(65f, Ring.NONE))
-    }
-
-    @Test
-    fun `hysteresis at lower edge of band with previous INNER`() {
-        // Distance = 52 (lower hysteresis edge), prev INNER → INNER
+    fun `deadzone retains INNER at band edges`() {
         assertEquals(Ring.INNER, engine.computeRing(52f, Ring.INNER))
-    }
-
-    @Test
-    fun `hysteresis at lower edge of band with previous OUTER`() {
-        // Distance = 52 (lower hysteresis edge), prev OUTER → OUTER
-        assertEquals(Ring.OUTER, engine.computeRing(52f, Ring.OUTER))
-    }
-
-    @Test
-    fun `hysteresis at upper edge of band with previous INNER`() {
-        // Distance = 68 (upper hysteresis edge), prev INNER → INNER
         assertEquals(Ring.INNER, engine.computeRing(68f, Ring.INNER))
     }
 
     @Test
-    fun `hysteresis at upper edge of band with previous OUTER`() {
-        // Distance = 68 (upper hysteresis edge), prev OUTER → OUTER
+    fun `deadzone retains OUTER at band edges`() {
+        assertEquals(Ring.OUTER, engine.computeRing(52f, Ring.OUTER))
         assertEquals(Ring.OUTER, engine.computeRing(68f, Ring.OUTER))
+    }
+
+    // ── Inner/outer boundary band (112..128) ──
+
+    @Test
+    fun `hysteresis keeps finger in INNER when slightly past boundary`() {
+        // 115 is inside the 112..128 band; prev INNER → INNER
+        assertEquals(Ring.INNER, engine.computeRing(115f, Ring.INNER))
+    }
+
+    @Test
+    fun `hysteresis keeps finger in OUTER when slightly before boundary`() {
+        // 125 is in the band; prev OUTER → OUTER
+        assertEquals(Ring.OUTER, engine.computeRing(125f, Ring.OUTER))
+    }
+
+    @Test
+    fun `hysteresis allows transition INNER to OUTER past upper hysteresis`() {
+        assertEquals(Ring.OUTER, engine.computeRing(128.1f, Ring.INNER))
+    }
+
+    @Test
+    fun `hysteresis allows transition OUTER to INNER when below lower hysteresis`() {
+        assertEquals(Ring.INNER, engine.computeRing(111.9f, Ring.OUTER))
+    }
+
+    @Test
+    fun `hysteresis at exact boundary retains previous ring when previously INNER`() {
+        assertEquals(Ring.INNER, engine.computeRing(120f, Ring.INNER))
+    }
+
+    @Test
+    fun `hysteresis at exact boundary retains previous ring when previously OUTER`() {
+        assertEquals(Ring.OUTER, engine.computeRing(120f, Ring.OUTER))
+    }
+
+    @Test
+    fun `hysteresis with no prior state at boundary favors INNER`() {
+        // Exactly at INNER_RADIUS_MAX → INNER (closer to center)
+        assertEquals(Ring.INNER, engine.computeRing(120f, Ring.NONE))
+    }
+
+    @Test
+    fun `hysteresis with no prior state below boundary favors INNER`() {
+        assertEquals(Ring.INNER, engine.computeRing(115f, Ring.NONE))
+    }
+
+    @Test
+    fun `hysteresis with no prior state above boundary favors OUTER`() {
+        assertEquals(Ring.OUTER, engine.computeRing(125f, Ring.NONE))
+    }
+
+    @Test
+    fun `hysteresis at lower edge of boundary band with previous INNER`() {
+        assertEquals(Ring.INNER, engine.computeRing(112f, Ring.INNER))
+    }
+
+    @Test
+    fun `hysteresis at lower edge of boundary band with previous OUTER`() {
+        assertEquals(Ring.OUTER, engine.computeRing(112f, Ring.OUTER))
+    }
+
+    @Test
+    fun `hysteresis at upper edge of boundary band with previous INNER`() {
+        assertEquals(Ring.INNER, engine.computeRing(128f, Ring.INNER))
+    }
+
+    @Test
+    fun `hysteresis at upper edge of boundary band with previous OUTER`() {
+        assertEquals(Ring.OUTER, engine.computeRing(128f, Ring.OUTER))
     }
 
     // ════════════════════════════════════════════════════════════
@@ -284,7 +319,6 @@ class GeometryEngineTest {
 
     @Test
     fun `segment boundary at 22_5 degrees belongs to segment 1`() {
-        // Exactly on the boundary → rounds up to segment 1
         assertEquals(1, engine.computeSegment(22.5f))
     }
 
@@ -305,13 +339,11 @@ class GeometryEngineTest {
 
     @Test
     fun `segment wraps at 360 degrees back to 0`() {
-        // 360° is equivalent to 0°
         assertEquals(0, engine.computeSegment(360f))
     }
 
     @Test
     fun `segment wraps at 337_5 to segment 0`() {
-        // Segment 0 spans 337.5° → 360° → 22.5°
         assertEquals(0, engine.computeSegment(337.5f))
     }
 
@@ -322,7 +354,6 @@ class GeometryEngineTest {
 
     @Test
     fun `segment at 337_4 returns 7`() {
-        // Just below 337.5° → still in segment 7
         assertEquals(7, engine.computeSegment(337.49f))
     }
 
@@ -332,22 +363,22 @@ class GeometryEngineTest {
 
     @Test
     fun `ringWithoutHysteresis returns INNER below boundary`() {
-        assertEquals(Ring.INNER, engine.ringWithoutHysteresis(59f))
+        assertEquals(Ring.INNER, engine.ringWithoutHysteresis(100f))
     }
 
     @Test
     fun `ringWithoutHysteresis returns OUTER above boundary`() {
-        assertEquals(Ring.OUTER, engine.ringWithoutHysteresis(61f))
+        assertEquals(Ring.OUTER, engine.ringWithoutHysteresis(121f))
     }
 
     @Test
-    fun `ringWithoutHysteresis returns NONE above outer max`() {
-        assertEquals(Ring.NONE, engine.ringWithoutHysteresis(121f))
+    fun `ringWithoutHysteresis returns NONE inside deadzone`() {
+        assertEquals(Ring.NONE, engine.ringWithoutHysteresis(50f))
     }
 
     @Test
-    fun `ringWithoutHysteresis at boundary returns INNER`() {
-        // At exactly 60 → INNER (uses ≤ comparison)
+    fun `ringWithoutHysteresis at deadzone boundary returns INNER`() {
+        // At exactly 60 → INNER (uses < comparison against deadzone)
         assertEquals(Ring.INNER, engine.ringWithoutHysteresis(60f))
     }
 
@@ -359,17 +390,31 @@ class GeometryEngineTest {
     fun `integration - southeast in inner ring segment 1`() {
         val ax = 500f
         val ay = 500f
-        val cx = 540f   // +40px right
-        val cy = 540f   // +40px down → southeast, 45°
+        val cx = 550f   // +50px right
+        val cy = 550f   // +50px down → southeast, 45°
 
-        val dist = engine.distance(ax, ay, cx, cy)   // ~56.57
-        val ang = engine.angle(ax, ay, cx, cy)        // ~45°
-        val ring = engine.computeRing(dist, Ring.NONE) // INNER (< 52)
-        val seg = engine.computeSegment(ang)           // segment 1
+        val distPx = engine.distance(ax, ay, cx, cy)          // ~70.7 px
+        val distDp = GeometryEngine.pxToDp(distPx, 1f)        // density 1 → same
+        val angle = engine.angle(ax, ay, cx, cy)              // 45°
+        val ring = engine.computeRing(distDp, Ring.NONE)      // INNER
+        val seg = engine.computeSegment(angle)                // 1
 
-        assertEquals(45f, ang, ANGLE_TOLERANCE)
+        assertEquals(45f, angle, ANGLE_TOLERANCE)
         assertEquals(Ring.INNER, ring)
         assertEquals(1, seg)
+    }
+
+    private fun ang(ax: Float, ay: Float, cx: Float, cy: Float): Float =
+        engine.angle(ax, ay, cx, cy)
+
+    private fun seg(ax: Float, ay: Float, cx: Float, cy: Float): Int =
+        engine.computeSegment(engine.angle(ax, ay, cx, cy))
+
+    @Test
+    fun `integration - deadzone rejects selection at anchor`() {
+        // Finger directly on the anchor → NONE, no segment
+        val dist = engine.distance(500f, 500f, 500f, 500f)
+        assertEquals(Ring.NONE, engine.computeRing(dist, Ring.NONE))
     }
 
     @Test
@@ -377,34 +422,33 @@ class GeometryEngineTest {
         var ring = Ring.NONE
         val transitions = mutableListOf<Pair<Float, Ring>>()
 
-        // Start at 30dp (clearly inner)
-        ring = engine.computeRing(30f, ring)
-        transitions.add(30f to ring)
-
-        // Move to 55dp (hysteresis band, prev INNER → stays INNER)
-        ring = engine.computeRing(55f, ring)
-        transitions.add(55f to ring)
-
-        // Move to 60dp (boundary, prev INNER → stays INNER)
-        ring = engine.computeRing(60f, ring)
-        transitions.add(60f to ring)
-
-        // Move to 65dp (still in hysteresis, prev INNER → stays INNER)
-        ring = engine.computeRing(65f, ring)
-        transitions.add(65f to ring)
-
-        // Move to 70dp (past upper hysteresis → switches to OUTER)
+        // Start at 70dp (clearly inner)
         ring = engine.computeRing(70f, ring)
         transitions.add(70f to ring)
 
-        // Now drag back inward...
-        // 65dp (hysteresis, prev OUTER → stays OUTER)
-        ring = engine.computeRing(65f, ring)
-        transitions.add(65f to ring)
+        // 110dp (below lower boundary hysteresis 112 → stays INNER)
+        ring = engine.computeRing(110f, ring)
+        transitions.add(110f to ring)
 
-        // 50dp (below lower hysteresis → switches back to INNER)
-        ring = engine.computeRing(50f, ring)
-        transitions.add(50f to ring)
+        // 115dp (boundary hysteresis band, prev INNER → stays INNER)
+        ring = engine.computeRing(115f, ring)
+        transitions.add(115f to ring)
+
+        // 125dp (still in band, prev INNER → stays INNER)
+        ring = engine.computeRing(125f, ring)
+        transitions.add(125f to ring)
+
+        // 130dp (past upper hysteresis → OUTER)
+        ring = engine.computeRing(130f, ring)
+        transitions.add(130f to ring)
+
+        // Drag back inward: 125 (band, prev OUTER → OUTER)
+        ring = engine.computeRing(125f, ring)
+        transitions.add(125f to ring)
+
+        // 100dp (below lower boundary hysteresis → INNER)
+        ring = engine.computeRing(100f, ring)
+        transitions.add(100f to ring)
 
         assertEquals(Ring.INNER, transitions[0].second)
         assertEquals(Ring.INNER, transitions[1].second)

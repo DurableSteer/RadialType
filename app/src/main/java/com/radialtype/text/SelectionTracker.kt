@@ -14,7 +14,8 @@ import com.radialtype.engine.TouchStateMachine.TouchState
  * - [updateState] is called on every state transition.
  * - When entering SECONDARY, the primary character at the dwell position
  *   is snapshotted; the label then comes from the syllable provider
- *   (Module 9) if available, otherwise it falls back to the primary char.
+ *   (Module 9) resolved against the secondary ring (INNER = ranks 0–3,
+ *   OUTER = ranks 4–7) and segment.
  *
  * Thread-safety: all methods are expected to be invoked on the main
  * thread (touch events + dwell timer callbacks), matching the IME setup.
@@ -64,8 +65,8 @@ class SelectionTracker(
 
     /**
      * Called on every state transition. On PRIMARY → SECONDARY the primary
-     * character at the dwell position is frozen; on SECONDARY → PRIMARY
-     * (escape), it is re-resolved for wherever the finger now sits.
+     * character at the dwell position is frozen; the secondary menu then
+     * resolves labels from the syllable provider.
      */
     fun updateState(state: TouchState) {
         if (state == currentState) return
@@ -73,12 +74,9 @@ class SelectionTracker(
         currentState = state
         when (state) {
             TouchState.PRIMARY ->
-                // Fresh DOWN resets ring/segment to NONE/−1 → label "";
-                // escape from SECONDARY re-resolves from the current cell.
                 currentPrimaryChar = characterMap.getPrimaryChar(currentRing, currentSegment)
 
             TouchState.SECONDARY ->
-                // Freeze the primary char exactly as dwelled.
                 currentPrimaryChar = characterMap.getPrimaryChar(currentRing, currentSegment)
 
             TouchState.IDLE -> { /* label resolves to "" anyway */ }
@@ -91,15 +89,19 @@ class SelectionTracker(
      *
      * - IDLE: ""
      * - PRIMARY: the primary character for (ring, segment)
-     * - SECONDARY: the ranked syllable at the current segment, falling
-     *   back to the primary char when no provider/syllable exists.
+     * - SECONDARY: the ranked syllable at the current secondary ring +
+     *   segment, falling back to the primary char when no entry exists.
+     *   Returns "" when the finger is in the secondary deadzone (NONE).
      */
-    fun currentLabel(): String = when (currentState) {
-        TouchState.IDLE -> ""
-        TouchState.PRIMARY -> currentPrimaryChar
-        TouchState.SECONDARY -> {
-            val syllable = syllableProvider?.getSyllable(currentPrimaryChar, currentSegment)
-            if (syllable.isNullOrEmpty()) currentPrimaryChar else syllable
+    fun currentLabel(): String {
+        return when (currentState) {
+            TouchState.IDLE -> ""
+            TouchState.PRIMARY -> currentPrimaryChar
+            TouchState.SECONDARY -> {
+                if (currentRing == Ring.NONE) return ""
+                val syllable = syllableProvider?.getSyllable(currentPrimaryChar, currentRing, currentSegment)
+                if (syllable.isNullOrEmpty()) currentPrimaryChar else syllable
+            }
         }
     }
 
