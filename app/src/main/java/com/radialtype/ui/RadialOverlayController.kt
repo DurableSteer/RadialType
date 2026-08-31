@@ -6,25 +6,18 @@ import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.WindowManager
-import com.radialtype.engine.TouchStateMachine.TouchState
 import com.radialtype.text.CharacterMap
+import com.radialtype.text.InputDispatcher
 import com.radialtype.text.SyllableProvider
 
 /**
- * Owns the two-window setup that makes RadialType work while leaving the
- * host app fully touchable:
- *
- *  1. [padView]   — a SMALL touchable window positioned exactly over the
- *     ergonomic ovoid. Only touches beginning inside it start a gesture.
- *     Everything outside its bounds physically belongs to the app below.
- *
- *  2. [overlayView] — a NON-touchable rendering window, added ONLY while
- *     a gesture is active and removed as soon as the gesture ends. No
- *     window ever floats over the host app between gestures, so the
- *     system's untrusted-touch protections never come into play during
- *     normal app interaction.
+ * Owns the two-window setup: a small touchable pad and a lazy fullscreen
+ * render layer. Module 11 adds the InputDispatcher, wired from the IME.
  */
-class RadialOverlayController(private val context: Context) {
+class RadialOverlayController(
+    private val context: Context,
+    inputConnectionProvider: () -> android.view.inputmethod.InputConnection?
+) {
 
     companion object {
         private const val ZONE_CENTER_X_FROM_RIGHT = 0.45f
@@ -41,6 +34,8 @@ class RadialOverlayController(private val context: Context) {
 
     val renderer = RadialRenderer(context, characterMap, syllableProvider)
 
+    private val inputDispatcher = InputDispatcher(inputConnectionProvider)
+
     private val overlayView = RadialOverlayView(context, renderer)
     val padView = RadialKeyboardView(context)
 
@@ -48,16 +43,11 @@ class RadialOverlayController(private val context: Context) {
     private var overlayAdded = false
 
     init {
+        padView.inputDispatcher = inputDispatcher
         padView.onRenderFrame = { data -> onFrame(data) }
         renderer.debugMode = true
     }
 
-    /**
-     * Central frame handler, driven by the pad. The fullscreen render
-     * layer only exists while a gesture is in flight — the moment the
-     * state machine returns to IDLE the window is removed entirely, so
-     * nothing overlays the host app between gestures.
-     */
     private fun onFrame(data: RadialRenderData) {
         val active = data.state != com.radialtype.engine.TouchStateMachine.TouchState.IDLE
         if (active && !overlayAdded) addOverlayWindow()
@@ -94,13 +84,12 @@ class RadialOverlayController(private val context: Context) {
         padView.screenOffsetX = zoneCX - rxPx
         padView.screenOffsetY = zoneCY - ryPx
 
-        // Only the small touchable pad is persistent.
         val padParams = WindowManager.LayoutParams(
             (rxPx * 2f).toInt(),
             (ryPx * 2f).toInt(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            android.graphics.PixelFormat.TRANSLUCENT
+            PixelFormat.TRANSLUCENT
         ).apply {
             gravity = android.view.Gravity.TOP or android.view.Gravity.START
             x = (zoneCX - rxPx).toInt()
@@ -110,7 +99,6 @@ class RadialOverlayController(private val context: Context) {
         padAdded = true
     }
 
-    /** Lazily adds the fullscreen render window when a gesture starts. */
     private fun addOverlayWindow() {
         if (overlayAdded) return
         val overlayParams = WindowManager.LayoutParams(
@@ -119,7 +107,7 @@ class RadialOverlayController(private val context: Context) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            android.graphics.PixelFormat.TRANSLUCENT
+            PixelFormat.TRANSLUCENT
         )
         wm.addView(overlayView, overlayParams)
         overlayAdded = true
@@ -129,12 +117,6 @@ class RadialOverlayController(private val context: Context) {
         if (!overlayAdded) return
         runCatching { wm.removeView(overlayView) }
         overlayAdded = false
-    }
-
-    private fun hidePad() {
-        if (!padAdded) return
-        runCatching { wm.removeView(padView) }
-        padAdded = false
     }
 
     fun hide() {
