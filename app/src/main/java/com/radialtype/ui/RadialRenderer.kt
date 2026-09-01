@@ -34,7 +34,8 @@ class RadialRenderData(
     val primaryChar: String,
     val label: String,
     val deleteLeftCount: Int = 0,
-    val deleteRightCount: Int = 0
+    val deleteRightCount: Int = 0,
+    val mode: com.radialtype.engine.LayoutMode = com.radialtype.engine.LayoutMode.LETTERS
 )
 
 /**
@@ -69,6 +70,10 @@ class RadialRenderer(
 
         /** Tokyo Night red for delete-mode feedback. */
         private const val DELETE_RED = 0xFFF7768EL
+        /** Tokyo Night green for number mode. */
+        private const val NUMBER_GREEN = 0xFF9ECE6AL
+        /** Tokyo Night yellow for symbol mode. */
+        private const val SYMBOL_YELLOW = 0xFFE0AF68L
     }
 
     var debugMode: Boolean = true
@@ -138,7 +143,7 @@ class RadialRenderer(
     fun render(canvas: Canvas, data: RadialRenderData) {
         // Live-sync configurable geometry each frame.
         if (SettingsManager.isInitialized) {
-            deadZoneRadius = SettingsManager.innerRingRadius
+            deadZoneRadius = SettingsManager.deadzoneRadius
             innerRadiusMax = SettingsManager.outerRingRadius
             outerRadiusMax = SettingsManager.outerRingMaxRadius
         }
@@ -160,6 +165,14 @@ class RadialRenderer(
         when (data.state) {
             TouchState.PRIMARY -> {
                 accent = CYAN.toInt()
+                cx = data.anchorX; cy = data.anchorY
+            }
+            TouchState.NUMBER -> {
+                accent = NUMBER_GREEN.toInt()
+                cx = data.anchorX; cy = data.anchorY
+            }
+            TouchState.SYMBOL -> {
+                accent = SYMBOL_YELLOW.toInt()
                 cx = data.anchorX; cy = data.anchorY
             }
             else -> {
@@ -239,28 +252,29 @@ class RadialRenderer(
 
         drawDeadZone(canvas, cx, cy, deadPx, data.state == TouchState.SECONDARY)
 
-        if (data.state == TouchState.PRIMARY) {
-            drawPrimaryLabels(canvas, cx, cy)
-        } else {
+        if (data.state == TouchState.SECONDARY) {
             drawSecondaryLabels(canvas, cx, cy, data.primaryChar)
+        } else {
+            drawPrimaryLabels(canvas, cx, cy, data.mode)
         }
     }
 
-    private fun drawPrimaryLabels(canvas: Canvas, cx: Float, cy: Float) {
+    private fun drawPrimaryLabels(canvas: Canvas, cx: Float, cy: Float, mode: com.radialtype.engine.LayoutMode) {
         val deadPx = deadZoneRadius * density
         val boundaryPx = innerRadiusMax * density
         val outerPx = outerRadiusMax * density
         val midInner = (deadPx + boundaryPx) / 2f
         val midOuter = (boundaryPx + outerPx) / 2f
+        val (innerChars, outerChars) = characterMap.ringsFor(mode)
 
         for (seg in 0 until 8) {
             val rad = Math.toRadians((seg * 45f).toDouble())
             val dx = cos(rad).toFloat()
             val dy = sin(rad).toFloat()
             drawCellLabel(canvas, cx + dx * midInner, cy + dy * midInner,
-                characterMap.innerRingChars.getOrElse(seg) { "" })
+                innerChars.getOrElse(seg) { "" })
             drawCellLabel(canvas, cx + dx * midOuter, cy + dy * midOuter,
-                characterMap.outerRingChars.getOrElse(seg) { "" })
+                outerChars.getOrElse(seg) { "" })
         }
     }
 

@@ -9,33 +9,39 @@ import com.radialtype.engine.GeometryEngine.Ring
 import com.radialtype.settings.SettingsManager
 
 /**
+ * Gesture mode selected by the double-tap gateway. LETTERS is the
+ * normal flow; NUMBERS/SYMBOLS commit from the primary ring directly
+ * (no secondary menu).
+ */
+enum class LayoutMode { LETTERS, NUMBERS, SYMBOLS }
+
+/**
  * Finite state machine for RadialType's single-gesture touch tracking.
  *
- * States: IDLE, PRIMARY, SECONDARY, DELETE.
+ * States: IDLE, PRIMARY, SECONDARY, AXIS_PENDING, DELETE, NUMBER, SYMBOL.
  *
  * ── Normal input (PRIMARY / SECONDARY) ──────────────────────────
- * Identical geometry in both states: [GeometryEngine.computeRing] and
- * [computeSegment] centred on the touch-down point (PRIMARY) or the
- * dwell point (SECONDARY). Dwell (PRIMARY → SECONDARY) is suppressed
- * in the deadzone. Overshoot beyond the outer edge clamps to OUTER.
+ * Identical geometry in both states, centred on the touch-down point
+ * (PRIMARY) or the dwell point (SECONDARY). Dwell is suppressed in the
+ * deadzone. Overshoot beyond the outer edge clamps to OUTER.
  *
- * ── DELETE state ────────────────────────────────────────────────
- * Entry paths:
- * 1. Double-tap on the deadzone (arming rule A): ANY gesture that ends
- *    while the ring is NONE arms the detector. If the next DOWN arrives
- *    within SettingsManager.doubleTapDeadzoneMs, DELETE starts on that
- *    DOWN and the DOWN's position becomes the delete anchor.
- * 2. [enterDeleteFromKey]: called by the view layer when the finger is
- *    resting on a DEL key. The current position becomes the anchor.
+ * ── Double-tap gateway (AXIS_PENDING) ───────────────────────────
+ * Any gesture ending with ring NONE arms the detector. A following DOWN
+ * within the configured window enters AXIS_PENDING; the FIRST move past
+ * the arm threshold decides the gesture's axis, which then locks:
+ * - horizontal (|dx| >= |dy|) → DELETE
+ * - upward  (dy < 0)          → NUMBER mode
+ * - downward (dy > 0)         → SYMBOL mode
  *
- * While in DELETE: horizontal displacement from the delete anchor
- * selects characters. Leftward drag → chars before the cursor
- * ([deleteLeftCount]); rightward drag → chars after the cursor
- * ([deleteRightCount]). One character per DELETE_CHAR_STEP_DP.
- * ACTION_UP fires [onDeleteCommit] with the final counts; ACTION_CANCEL
- * aborts via [onDeleteCancelled] with nothing deleted.
+ * ── DELETE ──────────────────────────────────────────────────────
+ * Horizontal drag selects characters left/right of the cursor with
+ * dual-threshold hysteresis; release commits via onDeleteCommit.
  *
- * In DELETE, ring/segment geometry and the dwell timer are suspended.
+ * ── NUMBER / SYMBOL modes ───────────────────────────────────────
+ * Behave exactly like PRIMARY (same ring/segment geometry, anchored at
+ * the second tap), except the dwell timer is never allowed to open a
+ * secondary menu — the label comes straight from the mode's layout and
+ * commits on release. Layout source: CharacterMap.ringsFor(activeMode).
  */
 class TouchStateMachine(
     private val geometryEngine: GeometryEngine = GeometryEngine(),
@@ -52,23 +58,26 @@ class TouchStateMachine(
         /** Default dwell duration before PRIMARY → SECONDARY. */
         const val DEFAULT_DWELL_MS = 125L
 
-        /** dp of horizontal travel per selected character in DELETE mode. */
-        const val DELETE_CHAR_STEP_DP = 12f
-
         /** Fallback double-tap window when SettingsManager is uninitialized. */
         const val DOUBLE_TAP_FALLBACK_MS = 300L
-        
+
         /** dp per millimetre on Android (160dp per inch / 25.4 mm). */
         const val DP_PER_MM = 160f / 25.4f
 
         /** Default characters deleted per mm of swipe (fallback). */
         const val DELETE_CHARS_PER_MM_DEFAULT = 2f
-        
-                /** |dx| (dp) required to FIRST enter a delete selection. */
+
+        /** |dx| (dp) required to FIRST enter a delete selection. */
         const val DELETE_ARM_THRESHOLD_DP = 6f
 
         /** |dx| below which an ACTIVE selection is released back to zero. */
         const val DELETE_DISARM_THRESHOLD_DP = 2f
+
+        /**
+         * Travel (dp, dominant axis) required after the double-tap DOWN
+         * before the gesture axis (delete/number/symbol) locks in.
+         */
+        const val AXIS_ARM_THRESHOLD_DP = 6f
     }
 
     val dwellTimer: DwellTimer = dwellTimerOverride
@@ -81,6 +90,10 @@ class TouchStateMachine(
     // ── Gesture state ────────────────────────────────────────────
 
     var state: TouchState = TouchState.IDLE
+        private set
+
+    /** Active layout mode (LETTERS unless the gateway opened a mode). */
+    var activeMode: LayoutMode = LayoutMode.LETTERS
         private set
 
     var anchorX: Float = 0f
@@ -202,7 +215,24 @@ class TouchStateMachine(
         deleteLeftCount = 0
         deleteRightCount = 0
         lastRingChangeTime = 0L
+        activeMode = LayoutMode.LETTERS
         transitionTo(TouchState.DELETE)
+    }
+
+    /** Locks the gateway to NUMBER or SYMBOL mode and shows the menu. */
+    private fun enterModeLocked(mode: LayoutMode) {
+        dwellTimer.cancel()
+        currentRing = Ring.NONE
+        currentSegment = -1
+        previousRing = Ring.NONE
+        previousSegment = -1
+        deleteLeftCount = 0
+        deleteRightCount = 0
+        lastRingChangeTime = 0L
+        activeMode = mode
+        transitionTo(
+            if (mode == LayoutMode.NUMBERS) TouchState.NUMBER else TouchState.SYMBOL
+        )
     }
 
     // ── Handlers ─────────────────────────────────────────────────
@@ -211,7 +241,7 @@ class TouchStateMachine(
         refreshFromSettings()
 
         // Arming rule A: previous gesture ended in the deadzone and this
-        // DOWN arrives within the configured window → DELETE immediately.
+        // DOWN arrives within the configured window → gateway gesture.
         val windowMs = if (SettingsManager.isInitialized) {
             SettingsManager.doubleTapDeadzoneMs.toLong()
         } else {
@@ -219,13 +249,21 @@ class TouchStateMachine(
         }
         val elapsed = SystemClock.uptimeMillis() - lastUpTimestamp
         if (lastUpInDeadzone && elapsed in 0..windowMs) {
-            Log.d(TAG, "Double-tap deadzone detected → DELETE mode")
+            Log.d(TAG, "Double-tap deadzone detected → AXIS_PENDING")
             anchorX = event.x
             anchorY = event.y
             currentX = event.x
             currentY = event.y
             lastUpInDeadzone = false
-            startDelete()
+            dwellTimer.cancel()
+            currentRing = Ring.NONE
+            currentSegment = -1
+            previousRing = Ring.NONE
+            previousSegment = -1
+            deleteLeftCount = 0
+            deleteRightCount = 0
+            lastRingChangeTime = 0L
+            transitionTo(TouchState.AXIS_PENDING)
             return true
         }
 
@@ -239,6 +277,7 @@ class TouchStateMachine(
         previousRing = Ring.NONE
         previousSegment = -1
         lastRingChangeTime = 0L
+        activeMode = LayoutMode.LETTERS
 
         transitionTo(TouchState.PRIMARY)
         return true
@@ -250,10 +289,13 @@ class TouchStateMachine(
         currentEventTime = event.eventTime
 
         when (state) {
-            TouchState.PRIMARY   -> handlePrimaryMove()
-            TouchState.SECONDARY -> handleSecondaryMove()
-            TouchState.DELETE    -> handleDeleteMove(event)
-            TouchState.IDLE      -> { /* spurious MOVE with no DOWN — ignore */ }
+            TouchState.PRIMARY      -> handlePrimaryMove()
+            TouchState.SECONDARY    -> handleSecondaryMove()
+            TouchState.DELETE       -> handleDeleteMove(event)
+            TouchState.AXIS_PENDING -> handleAxisPendingMove(event)
+            TouchState.NUMBER,
+            TouchState.SYMBOL       -> resolveGeometry(anchorX, anchorY)
+            TouchState.IDLE         -> { /* spurious MOVE with no DOWN — ignore */ }
         }
 
         onPositionChanged?.invoke()
@@ -271,6 +313,15 @@ class TouchStateMachine(
             lastUpInDeadzone = false
             transitionTo(TouchState.IDLE)
             onDeleteCommit?.invoke(left, right)
+            return true
+        }
+
+        // Gateway released before any axis lock: a deadzone-end that
+        // keeps the detector armed for another tap, but commits nothing.
+        if (state == TouchState.AXIS_PENDING) {
+            lastUpTimestamp = SystemClock.uptimeMillis()
+            lastUpInDeadzone = true
+            transitionTo(TouchState.IDLE)
             return true
         }
 
@@ -295,9 +346,40 @@ class TouchStateMachine(
         return true
     }
 
+    // ── Axis-resolution for the gateway gesture ──────────────────
+
+    /**
+     * First significant move after the gateway DOWN locks the gesture:
+     * horizontal → DELETE, upward → NUMBER, downward → SYMBOL. Once
+     * locked, this same move is processed immediately so the gesture
+     * loses no stroke.
+     */
+    private fun handleAxisPendingMove(event: MotionEvent) {
+        val dxDp = GeometryEngine.pxToDp(event.x - anchorX, density)
+        val dyDp = GeometryEngine.pxToDp(event.y - anchorY, density)
+
+        val axDp = Math.abs(dxDp)
+        val ayDp = Math.abs(dyDp)
+        if (axDp < AXIS_ARM_THRESHOLD_DP && ayDp < AXIS_ARM_THRESHOLD_DP) return
+
+        if (axDp >= ayDp) {
+            Log.d(TAG, "Gateway lock: horizontal → DELETE")
+            startDelete()
+            handleDeleteMove(event)
+        } else if (dyDp < 0f) {
+            Log.d(TAG, "Gateway lock: upward → NUMBER mode")
+            enterModeLocked(LayoutMode.NUMBERS)
+            resolveGeometry(anchorX, anchorY)
+        } else {
+            Log.d(TAG, "Gateway lock: downward → SYMBOL mode")
+            enterModeLocked(LayoutMode.SYMBOLS)
+            resolveGeometry(anchorX, anchorY)
+        }
+    }
+
     // ── DELETE-mode drag handling ────────────────────────────────
 
-        private fun handleDeleteMove(event: MotionEvent) {
+    private fun handleDeleteMove(event: MotionEvent) {
         val dxDp = GeometryEngine.pxToDp(event.x - anchorX, density)
         val axDp = Math.abs(dxDp)
 
@@ -342,13 +424,13 @@ class TouchStateMachine(
         }
     }
 
-    // ── Normal geometry resolution (PRIMARY / SECONDARY) ─────────
+    // ── Normal geometry resolution (PRIMARY / SECONDARY / modes) ─
 
     /**
-     * Common geometry resolution for both states. In SECONDARY the
-     * anchor is the dwell point; in PRIMARY it is the touch-down point.
-     * Deadzone (ring NONE) suppresses segment updates; overshoot
-     * beyond the outer edge clamps to OUTER.
+     * Common geometry resolution for PRIMARY, SECONDARY, NUMBER and
+     * SYMBOL. In SECONDARY the anchor is the dwell point; otherwise the
+     * gesture anchor. Deadzone (ring NONE) suppresses segment updates;
+     * overshoot beyond the outer edge clamps to OUTER.
      */
     private fun resolveGeometry(anchorX: Float, anchorY: Float) {
         val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
@@ -401,10 +483,13 @@ class TouchStateMachine(
         state = newState
 
         when (newState) {
-            TouchState.PRIMARY   -> dwellTimer.start()
-            TouchState.IDLE      -> dwellTimer.cancel()
-            TouchState.SECONDARY -> { /* dwell callback already fired */ }
-            TouchState.DELETE    -> { /* timer cancelled in startDelete */ }
+            TouchState.PRIMARY      -> dwellTimer.start()
+            TouchState.IDLE         -> dwellTimer.cancel()
+            TouchState.AXIS_PENDING -> dwellTimer.cancel()
+            TouchState.SECONDARY    -> { /* dwell callback already fired */ }
+            TouchState.DELETE       -> { /* timer cancelled in startDelete */ }
+            TouchState.NUMBER,
+            TouchState.SYMBOL       -> { /* dwell never fires in locked modes */ }
         }
 
         onStateChanged?.invoke(newState)
@@ -414,6 +499,9 @@ class TouchStateMachine(
         IDLE,
         PRIMARY,
         SECONDARY,
-        DELETE
+        AXIS_PENDING,
+        DELETE,
+        NUMBER,
+        SYMBOL
     }
 }

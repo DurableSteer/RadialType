@@ -59,7 +59,7 @@ object SettingsManager {
     
     const val DEADZONE_MIN = 5f
     const val DEADZONE_MAX = 50f
-    const val DEADZONE_DEFAULT = 15f
+    const val DEADZONE_DEFAULT = 25f
 
     @Volatile
     private var appContext: Context? = null
@@ -83,9 +83,8 @@ object SettingsManager {
         get() = prefs?.getBoolean(KEY_HAPTICS, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTICS, value) }
         
-    /** Haptic pulse when the finger leaves the deadzone (ring NONE → INNER/OUTER). */
     var hapticDeadzoneExit: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_DEADZONE_EXIT, true) ?: true
+        get() = prefs?.getBoolean(KEY_HAPTIC_DEADZONE_EXIT, false) ?: false
         set(value) = put { it.putBoolean(KEY_HAPTIC_DEADZONE_EXIT, value) }
 
     /** Haptic pulse on PRIMARY → SECONDARY transition. */
@@ -95,7 +94,7 @@ object SettingsManager {
 
     /** Haptic pulse on secondary INNER → OUTER ring transition. */
     var hapticSecondaryRingOut: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, false) ?: false
+        get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, value) }
 
     var autoSpaceEnabled: Boolean

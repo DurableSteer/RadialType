@@ -43,8 +43,12 @@ class LayoutEditorActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnApplySample).setOnClickListener {
             editor.setText(
-                "{\"inner\": [\"T\",\"N\",\"S\",\"R\",\"H\",\"L\",\"SHIFT\",\"C\"]," +
-                " \"outer\": [\"A\",\"E\",\"I\",\"O\",\"U\",\"W\",\"DEL\",\"G\"]}"
+                "{\n" +
+                "  \"inner\": [\"T\",\"N\",\"S\",\"R\",\"H\",\"L\",\"SHIFT\",\"C\"],\n" +
+                "  \"outer\": [\"A\",\"E\",\"I\",\"O\",\"U\",\"W\",\"DEL\",\"G\"],\n" +
+                "  \"digits\": { \"inner\": [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\"], \"outer\": [\"9\",\"0\",\"\",\"\",\"\",\"\",\"\",\"\"] },\n" +
+                "  \"symbols\": { \"inner\": [\".\",\",\",\"'\",\"-\",\"?\",\"!\",\"\\\"\",\":\"], \"outer\": [\"(\",\")\",\"@\",\"#\",\"&\",\"/\",\"+\",\"=\"] }\n" +
+                "}"
             )
         }
     }

@@ -39,7 +39,7 @@ class RadialOverlayController(
     private val inputDispatcher = InputDispatcher(inputConnectionProvider)
 
     private val overlayView = RadialOverlayView(context, renderer)
-    val padView = RadialKeyboardView(context)
+    val padView = RadialKeyboardView(context, characterMap)
 
     private var padAdded = false
     private var overlayAdded = false

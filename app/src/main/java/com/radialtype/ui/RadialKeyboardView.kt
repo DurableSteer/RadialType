@@ -31,7 +31,8 @@ import com.radialtype.text.SyllableProvider
  * Haptics: PRIMARY → SECONDARY and secondary INNER → OUTER only.
  */
 class RadialKeyboardView(
-    context: Context
+    context: Context,
+    characterMapOverride: CharacterMap? = null
 ) : View(context) {
 
     companion object {
@@ -45,7 +46,7 @@ class RadialKeyboardView(
 
     private var lastHapticState: TouchState = TouchState.IDLE
 
-    private val characterMap = CharacterMap(context)
+    private val characterMap: CharacterMap = characterMapOverride ?: CharacterMap(context)
     private val syllableProvider = SyllableProvider(context)
     val selectionTracker = SelectionTracker(characterMap, syllableProvider)
 
@@ -104,6 +105,7 @@ class RadialKeyboardView(
             }
             lastHapticState = newState
 
+            selectionTracker.mode = activeMode   // unqualified: apply-block receiver
             selectionTracker.update(currentRing, currentSegment)
             selectionTracker.updateState(newState)
             pushFrame()
@@ -191,6 +193,7 @@ class RadialKeyboardView(
             val ny = dy / zoneRY
             if (nx * nx + ny * ny > 1f) return false
             touchStateMachine.refreshFromSettings()
+            characterMap.maybeReload()
         }
         return touchStateMachine.onTouchEvent(event)
     }
@@ -210,7 +213,8 @@ class RadialKeyboardView(
                 primaryChar = selectionTracker.currentPrimaryChar,
                 label = selectionTracker.currentLabel(),
                 deleteLeftCount = touchStateMachine.deleteLeftCount,
-                deleteRightCount = touchStateMachine.deleteRightCount
+                deleteRightCount = touchStateMachine.deleteRightCount,
+                mode = touchStateMachine.activeMode
             )
         )
     }
