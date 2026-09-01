@@ -31,6 +31,12 @@ object SettingsManager {
     const val KEY_ENABLE_KEYBOARD_BUTTON = "enable_keyboard_button"
     const val KEY_OVERLAY_PERMISSION = "overlay_permission"
 
+    // Module 15 — language packs
+    const val KEY_LANGUAGE_PRIMARY = "language_primary"
+    const val KEY_LANGUAGE_SECONDARY = "language_secondary"
+    const val KEY_LANGUAGE_MIX_RATIO = "language_mix_ratio"
+    const val KEY_REGENERATE_LAYOUT = "regenerate_layout"
+
     // ── Bounds & defaults ────────────────────────────────────────
     const val DWELL_MIN = 1
     const val DWELL_MAX = 800
@@ -56,10 +62,16 @@ object SettingsManager {
     const val OUTER_RING_MIN = 60f
     const val OUTER_RING_MAX = 200f
     const val OUTER_RING_DEFAULT = 100f
-    
+
     const val DEADZONE_MIN = 5f
     const val DEADZONE_MAX = 50f
     const val DEADZONE_DEFAULT = 25f
+
+    // Module 15 — mix ratio bounds. Stored as percent 0..100
+    // (0 = 100% secondary language, 100 = 100% primary language).
+    const val LANGUAGE_MIX_MIN = 0
+    const val LANGUAGE_MIX_MAX = 100
+    const val LANGUAGE_MIX_DEFAULT = 70
 
     @Volatile
     private var appContext: Context? = null
@@ -82,7 +94,7 @@ object SettingsManager {
     var hapticsEnabled: Boolean
         get() = prefs?.getBoolean(KEY_HAPTICS, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTICS, value) }
-        
+
     var hapticDeadzoneExit: Boolean
         get() = prefs?.getBoolean(KEY_HAPTIC_DEADZONE_EXIT, false) ?: false
         set(value) = put { it.putBoolean(KEY_HAPTIC_DEADZONE_EXIT, value) }
@@ -133,6 +145,7 @@ object SettingsManager {
             it.putInt(KEY_DELETE_RATE, (value * 10f).toInt()
                 .coerceIn(DELETE_RATE_MIN, DELETE_RATE_MAX))
         }
+
     /** Radius of the centre deadzone (dp) — ring NONE. Independent of inner ring. */
     var deadzoneRadius: Float
         get() = clamp(prefs?.getInt(KEY_DEADZONE_RADIUS, DEADZONE_DEFAULT.toInt())
@@ -163,6 +176,28 @@ object SettingsManager {
 
     val outerRingMaxRadius: Float
         get() = outerRingRadius + 60f
+
+    // ── Language packs (Module 15) ───────────────────────────────
+
+    /** ISO code of the primary language pack (asset `langs/<code>.json`). */
+    var languagePrimary: String
+        get() = prefs?.getString(KEY_LANGUAGE_PRIMARY, "en") ?: "en"
+        set(value) = put { it.putString(KEY_LANGUAGE_PRIMARY, value) }
+
+    /** ISO code of the optional secondary pack; "" = single-language mode. */
+    var languageSecondary: String
+        get() = prefs?.getString(KEY_LANGUAGE_SECONDARY, "") ?: ""
+        set(value) = put { it.putString(KEY_LANGUAGE_SECONDARY, value) }
+
+    /** Blend weight of the PRIMARY language, 0..100 percent. */
+    var languageMixPercent: Int
+        get() = clamp(prefs?.getInt(KEY_LANGUAGE_MIX_RATIO, 70) ?: 70,
+            LANGUAGE_MIX_MIN, LANGUAGE_MIX_MAX)
+        set(value) = put { it.putInt(KEY_LANGUAGE_MIX_RATIO, clamp(value, LANGUAGE_MIX_MIN, LANGUAGE_MIX_MAX)) }
+
+    /** Primary-language weight as a 0.0–1.0 fraction, for [LayoutArranger.blend]. */
+    val languageMixRatio: Float
+        get() = languageMixPercent / 100f
 
     // ── Custom layout ────────────────────────────────────────────
 

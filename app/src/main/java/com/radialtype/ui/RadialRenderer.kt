@@ -279,21 +279,24 @@ class RadialRenderer(
     }
 
     private fun drawSecondaryLabels(canvas: Canvas, cx: Float, cy: Float, primaryChar: String) {
-        val deadPx = deadZoneRadius * density
-        val boundaryPx = innerRadiusMax * density
-        val outerPx = outerRadiusMax * density
-        val midInner = (deadPx + boundaryPx) / 2f
-        val midOuter = (boundaryPx + outerPx) / 2f
+      val deadPx = deadZoneRadius * density
+      val boundaryPx = innerRadiusMax * density
+      val outerPx = outerRadiusMax * density
+      val midInner = (deadPx + boundaryPx) / 2f
+      val midOuter = (boundaryPx + outerPx) / 2f
 
-        for (seg in 0 until 8) {
-            val isInner = SyllableProvider.SECONDARY_INNER_SEGMENTS.contains(seg)
-            val ring = if (isInner) Ring.INNER else Ring.OUTER
-            val rMid = if (isInner) midInner else midOuter
-            val rad = Math.toRadians((seg * 45f).toDouble())
-            val label = syllableProvider.getSyllable(primaryChar, ring, seg)
-            drawCellLabel(canvas, cx + cos(rad).toFloat() * rMid,
-                cy + sin(rad).toFloat() * rMid, label)
-        }
+      // Both rings are fully populated on the secondary menu: every
+      // segment resolves via the full ERGONOMIC_ORDER (inner ranks 0–7,
+      // outer ranks 8–15). Empty results simply draw nothing.
+      for (seg in 0 until 8) {
+          val rad = Math.toRadians((seg * 45f).toDouble())
+          val dx = cos(rad).toFloat()
+          val dy = sin(rad).toFloat()
+          drawCellLabel(canvas, cx + dx * midInner, cy + dy * midInner,
+              syllableProvider.getSyllable(primaryChar, Ring.INNER, seg))
+          drawCellLabel(canvas, cx + dx * midOuter, cy + dy * midOuter,
+              syllableProvider.getSyllable(primaryChar, Ring.OUTER, seg))
+      }
     }
 
     private fun drawCellLabel(canvas: Canvas, x: Float, y: Float, text: String) {

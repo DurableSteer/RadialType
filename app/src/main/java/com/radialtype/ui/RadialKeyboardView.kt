@@ -29,10 +29,15 @@ import com.radialtype.text.SyllableProvider
  * - "SHIFT" toggles auto-capitalization on release.
  *
  * Haptics: PRIMARY → SECONDARY and secondary INNER → OUTER only.
+ *
+ * Module 15: accepts an optional shared [SyllableProvider] so the pad view
+ * and the renderer always resolve generated syllable rankings identically.
+ * When null, this view creates its own (backwards-compatible with tests).
  */
 class RadialKeyboardView(
     context: Context,
-    characterMapOverride: CharacterMap? = null
+    characterMapOverride: CharacterMap? = null,
+    syllableProviderOverride: SyllableProvider? = null
 ) : View(context) {
 
     companion object {
@@ -47,7 +52,8 @@ class RadialKeyboardView(
     private var lastHapticState: TouchState = TouchState.IDLE
 
     private val characterMap: CharacterMap = characterMapOverride ?: CharacterMap(context)
-    private val syllableProvider = SyllableProvider(context)
+    private val syllableProvider: SyllableProvider =
+        syllableProviderOverride ?: SyllableProvider(context)
     val selectionTracker = SelectionTracker(characterMap, syllableProvider)
 
     private var zoneRX = 0f
@@ -194,6 +200,9 @@ class RadialKeyboardView(
             if (nx * nx + ny * ny > 1f) return false
             touchStateMachine.refreshFromSettings()
             characterMap.maybeReload()
+            // Module 15: propagate generated syllable overrides from any
+            // regenerated layout, gated by string-compare like the map.
+            syllableProvider.maybeReloadFromLayout(SettingsManager.customLayoutJson)
         }
         return touchStateMachine.onTouchEvent(event)
     }

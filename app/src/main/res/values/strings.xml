@@ -11,4 +11,27 @@
     <string name="btn_load_sample">Load Sample Layout</string>
     <string name="layout_save">Save</string>
     <string name="layout_saved">Layout saved</string>
+
+    <!-- Language pack generation -->
+    <string name="layout_gen_error_missing_pack">Language pack not found in assets (langs/%1$s.json)</string>
+    <string name="layout_regenerated">Layout regenerated from language packs</string>
+
+    <string-array name="language_names">
+        <item>English</item>
+        <item>German</item>
+    </string-array>
+    <string-array name="language_codes">
+        <item>en</item>
+        <item>de</item>
+    </string-array>
+    <string-array name="secondary_language_names">
+        <item>None (single language)</item>
+        <item>English</item>
+        <item>German</item>
+    </string-array>
+    <string-array name="secondary_language_codes">
+        <item></item>
+        <item>en</item>
+        <item>de</item>
+    </string-array>
 </resources>

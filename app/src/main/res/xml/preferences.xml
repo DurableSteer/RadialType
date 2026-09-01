@@ -99,7 +99,7 @@
             app:min="5"
             android:max="50"
             app:showSeekBarValue="true" />
-    
+
         <SeekBarPreference
             android:key="inner_ring_radius"
             android:title="Inner ring radius (dp)"
@@ -117,6 +117,38 @@
             app:min="60"
             android:max="200"
             app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Language &amp; layout generation">
+        <ListPreference
+            android:key="language_primary"
+            android:title="Primary language"
+            android:summary="Main language for letter and bigram frequency"
+            android:entries="@array/language_names"
+            android:entryValues="@array/language_codes"
+            android:defaultValue="en" />
+
+        <ListPreference
+            android:key="language_secondary"
+            android:title="Secondary language (optional)"
+            android:summary="Blend a second language into the layout"
+            android:entries="@array/secondary_language_names"
+            android:entryValues="@array/secondary_language_codes"
+            android:defaultValue="" />
+
+        <SeekBarPreference
+            android:key="language_mix_ratio"
+            android:title="Mix ratio (%)"
+            android:summary="Weight of the PRIMARY language; remainder goes to the secondary"
+            android:defaultValue="70"
+            app:min="0"
+            android:max="100"
+            app:showSeekBarValue="true" />
+
+        <Preference
+            android:key="regenerate_layout"
+            android:title="Regenerate layout from languages"
+            android:summary="Rebuild the frozen letter/syllable layout from the selected language packs. Warning: changes letter positions." />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Layout">
