@@ -32,18 +32,17 @@ class RadialRenderData(
     val ring: Ring,
     val segment: Int,
     val primaryChar: String,
-    val label: String
+    val label: String,
+    val deleteLeftCount: Int = 0,
+    val deleteRightCount: Int = 0
 )
 
 /**
  * Module 10 — Tokyo Night neon renderer.
  *
  * PRIMARY = cyan accent, SECONDARY = magenta, identical ring geometry.
- * The deadzone is a dark void with a faint red rim. Also draws the idle
- * first-touch ovoid so users know where the keyboard "lives".
- *
- * Module 12: ring radii and visibility are pulled from [SettingsManager]
- * on every frame, so advanced slider changes render live.
+ * DELETE state: no radial menu. The touch zone glows red and a live
+ * counter shows the pending deletion (← left / → right).
  */
 class RadialRenderer(
     context: Context,
@@ -67,6 +66,9 @@ class RadialRenderer(
         private const val DEAD_FILL = 0xF2161616L
         private const val DEAD_RIM = 0x66F7768EL
         private const val ZONE_STROKE = 0x597AA2F7L
+
+        /** Tokyo Night red for delete-mode feedback. */
+        private const val DELETE_RED = 0xFFF7768EL
     }
 
     var debugMode: Boolean = true
@@ -109,6 +111,11 @@ class RadialRenderer(
         color = DEAD_RIM.toInt()
     }
 
+    private val deleteWashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x2BF7768E.toInt()
+    }
+
     private val menuLabelPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = spToPx(MENU_LABEL_SP, context)
         textAlign = Paint.Align.CENTER
@@ -141,6 +148,12 @@ class RadialRenderer(
             return
         }
 
+        // DELETE: zone-glow feedback only — never a radial menu.
+        if (data.state == TouchState.DELETE) {
+            drawDeleteFeedback(canvas, data)
+            return
+        }
+
         val accent: Int
         val cx: Float
         val cy: Float
@@ -163,12 +176,50 @@ class RadialRenderer(
     private val effectiveDebug: Boolean
         get() = debugMode && (!SettingsManager.isInitialized || SettingsManager.debugMode)
 
+    /**
+     * Delete-mode feedback: the touch-zone ellipse washes red with a
+     * red rim, plus a finger halo and the live selection counter.
+     */
+    private fun drawDeleteFeedback(canvas: Canvas, data: RadialRenderData) {
+        if (zoneRX > 0f && zoneRY > 0f && zoneCX >= 0f) {
+            // Wash inside the idle touch zone only.
+            canvas.drawOval(
+                zoneCX - zoneRX, zoneCY - zoneRY,
+                zoneCX + zoneRX, zoneCY + zoneRY,
+                deleteWashPaint
+            )
+            // Red neon rim around the zone.
+            outlinePaint.color = DELETE_RED.toInt()
+            canvas.drawOval(
+                zoneCX - zoneRX, zoneCY - zoneRY,
+                zoneCX + zoneRX, zoneCY + zoneRY,
+                outlinePaint
+            )
+        }
+
+        // Halo around the finger.
+        glowPaint.color = 0x88F7768EL.toInt()
+        canvas.drawCircle(data.currentX, data.currentY, 22f * density, glowPaint)
+
+        val left = data.deleteLeftCount
+        val right = data.deleteRightCount
+        val sb = StringBuilder()
+        if (left > 0) sb.append("← ").append(left)
+        if (left > 0 && right > 0) sb.append("  ")
+        if (right > 0) sb.append(right).append(" →")
+        val text = if (sb.isEmpty()) "DEL" else sb.toString()
+
+        floatingLabelPaint.color = FG_BRIGHT.toInt()
+        floatingLabelPaint.setShadowLayer(12f * density, 0f, 0f, DELETE_RED.toInt())
+        val y = (data.currentY - LABEL_OFFSET_PX).coerceAtLeast(floatingLabelPaint.textSize)
+        canvas.drawText(text, data.currentX, y, floatingLabelPaint)
+    }
+
     private fun drawMenu(canvas: Canvas, cx: Float, cy: Float, accent: Int, data: RadialRenderData) {
         val deadPx = deadZoneRadius * density
         val boundaryPx = innerRadiusMax * density
         val outerPx = outerRadiusMax * density
 
-        // 1. Sector fills, both rings.
         for (seg in 0 until 8) {
             drawAnnularSlice(canvas, cx, cy, deadPx, boundaryPx, seg,
                 sectorColor(accent, data.ring == Ring.INNER && data.segment == seg))
@@ -176,7 +227,6 @@ class RadialRenderer(
                 sectorColor(accent, data.ring == Ring.OUTER && data.segment == seg))
         }
 
-        // 2. Neon glow + outline on the active sector.
         if (data.ring != Ring.NONE && data.segment in 0 until 8) {
             val lo = if (data.ring == Ring.INNER) deadPx else boundaryPx
             val hi = if (data.ring == Ring.INNER) boundaryPx else outerPx
@@ -189,7 +239,6 @@ class RadialRenderer(
 
         drawDeadZone(canvas, cx, cy, deadPx, data.state == TouchState.SECONDARY)
 
-        // 3. Labels
         if (data.state == TouchState.PRIMARY) {
             drawPrimaryLabels(canvas, cx, cy)
         } else {

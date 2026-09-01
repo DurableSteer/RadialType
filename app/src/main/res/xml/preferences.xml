@@ -15,15 +15,36 @@
         <SwitchPreferenceCompat
             android:key="haptic_feedback"
             android:title="Haptic feedback"
-            android:summary="Vibrate on secondary-menu entry and inner→outer ring moves"
+            android:summary="Master switch for all vibration pulses"
             android:defaultValue="true" />
+
+        <SwitchPreferenceCompat
+            android:key="haptic_deadzone_exit"
+            android:title="Pulse on deadzone exit"
+            android:summary="Vibrate when the finger leaves the centre deadzone"
+            android:defaultValue="false"
+            android:dependency="haptic_feedback" />
+
+        <SwitchPreferenceCompat
+            android:key="haptic_secondary_enter"
+            android:title="Pulse on secondary menu"
+            android:summary="Vibrate when entering the secondary (syllable) menu"
+            android:defaultValue="true"
+            android:dependency="haptic_feedback" />
+
+        <SwitchPreferenceCompat
+            android:key="haptic_secondary_ring_out"
+            android:title="Pulse on outer ring"
+            android:summary="Vibrate when moving from inner to outer ring on the secondary menu"
+            android:defaultValue="true"
+            android:dependency="haptic_feedback" />
 
         <SeekBarPreference
             android:key="vibration_length"
             android:title="Vibration length (ms)"
             android:summary="Duration of each haptic pulse"
-            android:defaultValue="30"
-            app:min="10"
+            android:defaultValue="10"
+            app:min="1"
             android:max="150"
             app:showSeekBarValue="true" />
 
@@ -31,8 +52,8 @@
             android:key="dwell_duration"
             android:title="Dwell duration (ms)"
             android:summary="How long the finger must rest before the secondary syllable menu opens"
-            android:defaultValue="125"
-            app:min="100"
+            android:defaultValue="75"
+            app:min="1"
             android:max="800"
             app:showSeekBarValue="true" />
 
@@ -49,12 +70,41 @@
             android:defaultValue="true" />
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="Delete gesture">
+        <SeekBarPreference
+            android:key="double_tap_deadzone"
+            android:title="Double-tap window (ms)"
+            android:summary="Max interval between deadzone taps that triggers delete mode"
+            android:defaultValue="300"
+            app:min="100"
+            android:max="600"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="delete_chars_per_mm"
+            android:title="Characters per mm (delete)"
+            android:summary="How many characters are selected per millimetre of horizontal swipe (0.1 – 10.0)"
+            android:defaultValue="20"
+            app:min="1"
+            android:max="100"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Advanced — Ring geometry">
+        <SeekBarPreference
+            android:key="deadzone_radius"
+            android:title="Deadzone size (dp)"
+            android:summary="Radius of the centre zone where no character is selected"
+            android:defaultValue="15"
+            app:min="5"
+            android:max="50"
+            app:showSeekBarValue="true" />
+    
         <SeekBarPreference
             android:key="inner_ring_radius"
             android:title="Inner ring radius (dp)"
             android:summary="Deadzone edge; inner ring starts here"
-            android:defaultValue="60"
+            android:defaultValue="40"
             app:min="30"
             android:max="100"
             app:showSeekBarValue="true" />
@@ -63,10 +113,17 @@
             android:key="outer_ring_radius"
             android:title="Outer ring radius (dp)"
             android:summary="Inner/outer ring boundary"
-            android:defaultValue="120"
+            android:defaultValue="100"
             app:min="60"
             android:max="200"
             app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Layout">
+        <Preference
+            android:key="open_layout_editor"
+            android:title="Custom layout"
+            android:summary="Edit ring characters and function keys (DEL, SHIFT, SPACE)" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Activation">

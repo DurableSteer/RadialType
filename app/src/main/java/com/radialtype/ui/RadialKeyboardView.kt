@@ -21,10 +21,14 @@ import com.radialtype.text.SyllableProvider
 /**
  * The small, touchable pad that starts radial gestures.
  *
- * Haptic feedback (Module 13 redesign):
- * - PRIMARY → SECONDARY state change: [HapticController.pulseSecondaryEnter]
- * - INNER → OUTER ring change WHILE in SECONDARY: [HapticController.pulseSecondaryRingOut]
- * - No other events produce haptics.
+ * Function keys (Module 13):
+ * - A layout slot containing "DEL" enters DELETE mode as soon as the
+ *   finger selects it; horizontal swiping selects characters, release
+ *   deletes them.
+ * - "SPACE" commits a space on release.
+ * - "SHIFT" toggles auto-capitalization on release.
+ *
+ * Haptics: PRIMARY → SECONDARY and secondary INNER → OUTER only.
  */
 class RadialKeyboardView(
     context: Context
@@ -67,6 +71,10 @@ class RadialKeyboardView(
     val currentX: Float get() = touchStateMachine.currentX
     val currentY: Float get() = touchStateMachine.currentY
 
+    /** True while a DELETE gesture is active — the renderer uses this. */
+    val isDeleting: Boolean get() = touchStateMachine.state == TouchState.DELETE
+
+
     fun configureZone(rxPx: Float, ryPx: Float) {
         zoneRX = rxPx
         zoneRY = ryPx
@@ -91,7 +99,6 @@ class RadialKeyboardView(
         onStateChanged = { newState ->
             Log.d(TAG, "State -> $newState")
 
-            // Haptic 1 of 2: PRIMARY → SECONDARY
             if (lastHapticState == TouchState.PRIMARY && newState == TouchState.SECONDARY) {
                 haptics.pulseSecondaryEnter()
             }
@@ -108,12 +115,31 @@ class RadialKeyboardView(
         onCommit = {
             val label = selectionTracker.currentLabel()
             Log.d(TAG, "Commit (seg=$currentSegment ring=$currentRing label=$label)")
-            if (label.isNotEmpty()) inputDispatcher?.commit(label)
+            when (label) {
+                CharacterMap.TOKEN_SPACE -> inputDispatcher?.commitSpace()
+                CharacterMap.TOKEN_SHIFT -> {
+                    // Toggle auto-capitalization for subsequent commits.
+                    SettingsManager.autoCapitalization = !SettingsManager.autoCapitalization
+                }
+                // DEL never reaches here as a normal commit: entering
+                // DELETE mode replaces the selection below. An empty
+                // label or DEL falling through does nothing.
+            }
+            if (label.isNotEmpty() && label != CharacterMap.TOKEN_SPACE &&
+                !characterMap.isFunctionKey(label)
+            ) {
+                inputDispatcher?.commit(label)
+            }
         }
         onRingChanged = { ring ->
-            Log.d(TAG, "Ring changed -> $ring")
+            Log.d(TAG, "Ring changed -> $ring (prev=$previousRing)")
 
-            // Haptic 2 of 2: INNER → OUTER on the SECONDARY menu only
+            // Deadzone exit: NONE → any ring, fires on both PRIMARY and SECONDARY.
+            if (previousRing == GeometryEngine.Ring.NONE && ring != GeometryEngine.Ring.NONE) {
+                haptics.pulseDeadzoneExit()
+            }
+
+            // Secondary inner → outer ring transition.
             if (state == TouchState.SECONDARY &&
                 previousRing == GeometryEngine.Ring.INNER &&
                 ring == GeometryEngine.Ring.OUTER
@@ -123,8 +149,33 @@ class RadialKeyboardView(
         }
         onSegmentChanged = { segment ->
             Log.d(TAG, "Segment changed -> $segment")
-            // No haptic on segment changes
             selectionTracker.update(currentRing, currentSegment)
+
+            // DEL-key entry path: the moment the finger selects a DEL key
+            // in PRIMARY, switch to delete mode (finger stays down).
+            // Note: `enterDeleteFromKey` resolves to the state machine's
+            // own method via the apply-block receiver — no qualifier.
+            if (state == TouchState.PRIMARY &&
+                characterMap.getPrimaryChar(currentRing, segment) == CharacterMap.TOKEN_DEL
+            ) {
+                enterDeleteFromKey()
+            }
+        }
+
+        onDeleteProgress = { left, right ->
+            Log.d(TAG, "Delete progress: -$left +$right")
+            inputDispatcher?.previewDeleteRange(left, right)
+            pushFrame()
+        }
+        onDeleteCommit = { left, right ->
+            Log.d(TAG, "Delete commit: -$left +$right")
+            inputDispatcher?.deleteRange(left, right)
+            pushFrame()
+        }
+        onDeleteCancelled = {
+            Log.d(TAG, "Delete cancelled")
+            inputDispatcher?.cancelDeletePreview()
+            pushFrame()
         }
     }
 
@@ -139,7 +190,6 @@ class RadialKeyboardView(
             val nx = dx / zoneRX
             val ny = dy / zoneRY
             if (nx * nx + ny * ny > 1f) return false
-            // Refresh all settings (radii + dwell) at gesture start
             touchStateMachine.refreshFromSettings()
         }
         return touchStateMachine.onTouchEvent(event)
@@ -158,7 +208,9 @@ class RadialKeyboardView(
                 ring = selectionTracker.currentRing,
                 segment = selectionTracker.currentSegment,
                 primaryChar = selectionTracker.currentPrimaryChar,
-                label = selectionTracker.currentLabel()
+                label = selectionTracker.currentLabel(),
+                deleteLeftCount = touchStateMachine.deleteLeftCount,
+                deleteRightCount = touchStateMachine.deleteRightCount
             )
         )
     }

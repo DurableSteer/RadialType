@@ -48,7 +48,7 @@ class GeometryEngine(
      * sliders take effect live. Safe to call on every touch-down.
      */
     fun refreshFromSettings() {
-        deadZoneRadius = SettingsManager.innerRingRadius
+        deadZoneRadius = SettingsManager.deadzoneRadius
         innerRadiusMax = SettingsManager.outerRingRadius
         outerRadiusMax = SettingsManager.outerRingMaxRadius
     }

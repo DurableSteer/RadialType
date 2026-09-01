@@ -79,6 +79,9 @@ class SelectionTracker(
             TouchState.SECONDARY ->
                 currentPrimaryChar = characterMap.getPrimaryChar(currentRing, currentSegment)
 
+            TouchState.DELETE ->
+                currentPrimaryChar = ""   // delete mode has no primary selection
+
             TouchState.IDLE -> { /* label resolves to "" anyway */ }
         }
         if (previous != state) notifyChanged()
@@ -102,6 +105,7 @@ class SelectionTracker(
                 val syllable = syllableProvider?.getSyllable(currentPrimaryChar, currentRing, currentSegment)
                 if (syllable.isNullOrEmpty()) currentPrimaryChar else syllable
             }
+            TouchState.DELETE -> ""   // label handled by the delete overlay, not the text label
         }
     }
 

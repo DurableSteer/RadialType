@@ -8,66 +8,52 @@ import android.os.VibratorManager
 import com.radialtype.settings.SettingsManager
 
 /**
- * Central haptic feedback provider for RadialType.
+ * Module 13 — Three independently toggleable haptic events:
+ * - [pulseDeadzoneExit]: finger leaves the deadzone (ring NONE → INNER/OUTER).
+ * - [pulseSecondaryEnter]: PRIMARY → SECONDARY transition.
+ * - [pulseSecondaryRingOut]: secondary INNER → OUTER ring transition.
  *
- * Exactly TWO pulses exist in the entire interaction:
- *
- * 1. [pulseSecondaryEnter] — fires when PRIMARY → SECONDARY (dwell
- *    completes and the syllable menu opens).
- * 2. [pulseSecondaryRingOut] — fires on the secondary menu only,
- *    when the finger crosses from the INNER ring to the OUTER ring.
- *
- * Both pulse durations come from the "Vibration length" setting.
- * The master haptics toggle gates everything.
+ * The master [SettingsManager.hapticsEnabled] switch gates all pulses.
+ * Each event also has its own sub-toggle. Vibration duration comes from
+ * [SettingsManager.vibrationLengthMs].
  */
-class HapticController(context: Context) {
+class HapticController(private val context: Context) {
 
-    private val vibrator: Vibrator? = acquireVibrator(context)
-
-    @Volatile
-    var isEnabled: Boolean = true
-        private set
-
-    fun setEnabled(enabled: Boolean) {
-        isEnabled = enabled
-    }
-
-    private val effectiveEnabled: Boolean
-        get() = isEnabled &&
-            (!SettingsManager.isInitialized || SettingsManager.hapticsEnabled)
-
-    /** Fires when the dwell timer fires and PRIMARY → SECONDARY. */
-    fun pulseSecondaryEnter() {
-        if (!effectiveEnabled) return
-        oneShot(SettingsManager.vibrationLengthMs.toLong())
-    }
-
-    /**
-     * Fires when, on the SECONDARY menu, the finger moves from
-     * INNER to OUTER. Does NOT fire on the primary menu.
-     */
-    fun pulseSecondaryRingOut() {
-        if (!effectiveEnabled) return
-        oneShot(SettingsManager.vibrationLengthMs.toLong())
-    }
-
-    // ── Internals ────────────────────────────────────────────────
-
-    private fun oneShot(durationMs: Long) {
-        val v = vibrator ?: return
-        if (!v.hasVibrator()) return
-        runCatching {
-            v.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
-        }
-    }
-
-    private fun acquireVibrator(context: Context): Vibrator? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val manager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-            manager?.defaultVibrator
+    private val vibrator: Vibrator? by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
+                    as? VibratorManager)?.defaultVibrator
         } else {
             @Suppress("DEPRECATION")
             context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
+    }
+
+    private fun pulse() {
+        if (!SettingsManager.hapticsEnabled) return
+        val ms = SettingsManager.vibrationLengthMs.toLong()
+        if (ms <= 0) return
+        val v = vibrator ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            v.vibrate(ms)
+        }
+    }
+
+    fun pulseDeadzoneExit() {
+        if (!SettingsManager.hapticDeadzoneExit) return
+        pulse()
+    }
+
+    fun pulseSecondaryEnter() {
+        if (!SettingsManager.hapticSecondaryEnter) return
+        pulse()
+    }
+
+    fun pulseSecondaryRingOut() {
+        if (!SettingsManager.hapticSecondaryRingOut) return
+        pulse()
     }
 }
