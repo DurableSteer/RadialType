@@ -17,6 +17,7 @@ object SettingsManager {
     const val KEY_HAPTIC_DEADZONE_EXIT = "haptic_deadzone_exit"
     const val KEY_HAPTIC_SECONDARY_ENTER = "haptic_secondary_enter"
     const val KEY_HAPTIC_SECONDARY_RING_OUT = "haptic_secondary_ring_out"
+    const val KEY_HAPTIC_DELETE_TICK = "haptic_delete_tick"
     const val KEY_DWELL_DURATION = "dwell_duration"
     const val KEY_VIBRATION_LENGTH = "vibration_length"
     const val KEY_DOUBLE_TAP_DEADZONE = "double_tap_deadzone"
@@ -29,7 +30,6 @@ object SettingsManager {
     const val KEY_CUSTOM_LAYOUT = "custom_layout_json"
     const val KEY_OPEN_LAYOUT_EDITOR = "open_layout_editor"
     const val KEY_ENABLE_KEYBOARD_BUTTON = "enable_keyboard_button"
-    const val KEY_OVERLAY_PERMISSION = "overlay_permission"
     const val KEY_PERF_HUD = "perf_hud"
     const val KEY_RING_HYSTERESIS = "ring_hysteresis"
     const val KEY_SEGMENT_HYSTERESIS = "segment_hysteresis"
@@ -37,6 +37,7 @@ object SettingsManager {
     const val KEY_FLOATING_FONT = "floating_font_size"
     const val KEY_MENU_FONT = "menu_font_size"
     const val KEY_SUPPRESSION_WINDOW = "suppression_window"
+    
 
     //   language packs
     const val KEY_LANGUAGE_PRIMARY = "language_primary"
@@ -55,7 +56,7 @@ object SettingsManager {
 
     const val DOUBLE_TAP_MIN = 100
     const val DOUBLE_TAP_MAX = 600
-    const val DOUBLE_TAP_DEFAULT = 300
+    const val DOUBLE_TAP_DEFAULT = 120
 
     // Stored in tenths: slider 1..100 → 0.1..10.0 chars/mm.
     const val DELETE_RATE_MIN = 1
@@ -72,7 +73,7 @@ object SettingsManager {
 
     const val DEADZONE_MIN = 10f
     const val DEADZONE_MAX = 60f
-    const val DEADZONE_DEFAULT = 15f
+    const val DEADZONE_DEFAULT = 20f
     
     // ── Hysteresis bounds (stored in tenths) ─────────────────────
     const val RING_HYSTERESIS_MIN = 0      // 0.0 dp
@@ -85,7 +86,7 @@ object SettingsManager {
 
     const val FLOATING_OFFSET_MIN = 60
     const val FLOATING_OFFSET_MAX = 320
-    const val FLOATING_OFFSET_DEFAULT = 160
+    const val FLOATING_OFFSET_DEFAULT = 180
 
     const val FLOATING_FONT_MIN = 12
     const val FLOATING_FONT_MAX = 64
@@ -98,7 +99,7 @@ object SettingsManager {
     // Post-ring-change segment suppression window (ms).
     const val SUPPRESSION_MIN = 0
     const val SUPPRESSION_MAX = 200
-    const val SUPPRESSION_DEFAULT = 50
+    const val SUPPRESSION_DEFAULT = 30
 
     // (0 = 100% secondary language, 100 = 100% primary language).
     const val LANGUAGE_MIX_MIN = 0
@@ -144,6 +145,11 @@ object SettingsManager {
     var hapticSecondaryRingOut: Boolean
         get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, value) }
+    
+    /** Sub-toggle for the delete-mode per-character tick. */
+    var hapticDeleteTick: Boolean
+        get() = prefs?.getBoolean(KEY_HAPTIC_DELETE_TICK, true) ?: true
+        set(value) = put { it.putBoolean(KEY_HAPTIC_DELETE_TICK, value) }
 
     var autoSpaceEnabled: Boolean
         get() = prefs?.getBoolean(KEY_AUTO_SPACE, false) ?: false

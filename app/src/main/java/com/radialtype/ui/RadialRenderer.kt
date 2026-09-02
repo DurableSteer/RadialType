@@ -3,9 +3,10 @@ package com.radialtype.ui
 import java.util.Locale
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextPaint
@@ -62,13 +63,11 @@ class RadialRenderer(
         private const val FG_BRIGHT = 0xFFEAF0FAL
 
         private const val SECTOR_IDLE = 0x0F161B26L      // whisper-faint glass
-        private const val SECTOR_ACTIVE_BASE = 0x59000000L
         private const val LINE_STRONG = 0x597AA2F7L      // inner boundary
         private const val LINE_FAINT = 0x2E565F89L       // outer edge
         private const val CELL_BACKDROP = 0xB31A1B26L    // translucent label chip
         private const val CELL_BORDER = 0x33565F89L
 
-        private const val PANEL_BASE = 0xE61A1B26L       // floating label panel
         private const val DEAD_FILL = 0xD9161616L
         private const val DEAD_RIM = 0x66F7768EL
         private const val ZONE_STROKE = 0x597AA2F7L
@@ -85,10 +84,10 @@ class RadialRenderer(
     var deadZoneRadius: Float = GeometryEngine.DEAD_ZONE_RADIUS
     var innerRadiusMax: Float = GeometryEngine.INNER_RADIUS_MAX
     var outerRadiusMax: Float = GeometryEngine.OUTER_RADIUS_MAX
-    
+
     var floatingLabelOffsetPx: Float = LABEL_OFFSET_PX
         private set
-        
+
     private var cachedMenuSp = 0f
     private var cachedFloatSp = 0f
 
@@ -108,7 +107,7 @@ class RadialRenderer(
         style = Paint.Style.STROKE
         strokeWidth = 1.5f * density
     }
-    
+
     private val ringLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f * density
@@ -167,6 +166,7 @@ class RadialRenderer(
 
     fun setTouchZone(cx: Float, cy: Float, rx: Float, ry: Float) {
         zoneCX = cx; zoneCY = cy; zoneRX = rx; zoneRY = ry
+        idlePatternBuilt = false   // geometry changed → rebuild the lattice
     }
 
     fun render(canvas: Canvas, data: RadialRenderData) {
@@ -177,15 +177,10 @@ class RadialRenderer(
             outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
         }
 
-        if (data.state == TouchState.IDLE) {
-            if (effectiveDebug && showIdleZoneHint) drawIdleZone(canvas)
-            return
-        }
-
-        // Gateway gesture, axis not yet locked: draw nothing. The menu
-        // only appears once the flick resolves to DELETE / NUMBER / SYMBOL.
-        if (data.state == TouchState.AXIS_PENDING) {
-            if (effectiveDebug && showIdleZoneHint) drawIdleZone(canvas)
+        if (data.state == TouchState.IDLE || data.state == TouchState.AXIS_PENDING) {
+            // Idle styling is owned by the pad view itself — the overlay
+            // window doesn't exist in IDLE, so anything drawn here only
+            // flashes during teardown frames (the "flicker").
             return
         }
 
@@ -222,20 +217,19 @@ class RadialRenderer(
 
     private fun drawDeleteFeedback(canvas: Canvas, data: RadialRenderData) {
         if (zoneRX > 0f && zoneRY > 0f && zoneCX >= 0f) {
-            canvas.drawOval(
-                zoneCX - zoneRX, zoneCY - zoneRY,
-                zoneCX + zoneRX, zoneCY + zoneRY,
-                deleteWashPaint
-            )
+            // Rounded-rect red wash + hairline rim, matching the pad's
+            // perforated-glass styling instead of the old oval.
+            val inset = 2f
+            val r = 12f * density
+            scratchRect.set(zoneCX - zoneRX + inset, zoneCY - zoneRY + inset,
+                            zoneCX + zoneRX - inset, zoneCY + zoneRY - inset)
+            deleteWashPaint.alpha = 0x2B
+            canvas.drawRoundRect(scratchRect, r, r, deleteWashPaint)
             outlinePaint.color = DELETE_RED.toInt()
-            canvas.drawOval(
-                zoneCX - zoneRX, zoneCY - zoneRY,
-                zoneCX + zoneRX, zoneCY + zoneRY,
-                outlinePaint
-            )
+            canvas.drawRoundRect(scratchRect, r, r, outlinePaint)
         }
 
-        drawCircleGlow(canvas, data.currentX, data.currentY, 22f * density, 0x88F7768E.toInt())          // ← replaced glowPaint circle
+        drawCircleGlow(canvas, data.currentX, data.currentY, 22f * density, 0x88F7768E.toInt())
 
         val left = data.deleteLeftCount
         val right = data.deleteRightCount
@@ -249,7 +243,7 @@ class RadialRenderer(
         drawFloatingTextWithBackdrop(canvas, text, data.labelX, y,
             floatingLabelPaint, DELETE_RED.toInt())
     }
-    
+
     /** Pulls label/typography feel settings. Cheap string-free compare. */
     private fun refreshFeelFromSettings() {
         if (!SettingsManager.isInitialized) return
@@ -395,20 +389,62 @@ class RadialRenderer(
 
     private fun drawIdleZone(canvas: Canvas) {
         if (zoneRX <= 0f || zoneRY <= 0f) return
+        if (!idlePatternBuilt) buildIdleDotPattern()
 
-        // Slow neon breath: 2.4 s sine cycle. Alpha-only animation —
-        // no allocations, safe for the redraw loop.
-        val phase = (System.currentTimeMillis() % 2400L) / 2400f
-        val breathe = 0.5f + 0.5f * sin(2f * Math.PI.toFloat() * phase)
-
+        // Glass fill — faint cyan wash over the whole zone.
         glassIdlePaint.color = CYAN.toInt()
-        glassIdlePaint.alpha = (0x08 + 0x10 * breathe).toInt()   // 16..44
+        glassIdlePaint.alpha = 0x12
         canvas.drawOval(zoneCX - zoneRX, zoneCY - zoneRY,
             zoneCX + zoneRX, zoneCY + zoneRY, glassIdlePaint)
 
-        zoneStroke.alpha = (0x26 + 0x26 * breathe).toInt()        // 38..96
+        // Perforated-glass lattice: staggered dim cyan dots, clipped to
+        // the zone oval. Pattern is centered on the zone origin and
+        // rebuilt only when the zone geometry changes.
+        val save = canvas.save()
+        canvas.clipPath(idleZoneOvalPath)
+        canvas.save()
+        canvas.translate(zoneCX, zoneCY)
+        canvas.drawPath(idleDotPath, idleDotPaint)
+        canvas.restoreToCount(save)
+
+        // Quiet neon rim.
+        zoneStroke.alpha = 0x40
         canvas.drawOval(zoneCX - zoneRX, zoneCY - zoneRY,
             zoneCX + zoneRX, zoneCY + zoneRY, zoneStroke)
+    }
+
+    // ── Idle-zone dot lattice (built once, drawn per frame) ──────
+
+    private var idlePatternBuilt = false
+    private val idleDotPath = Path()
+    private val idleZoneOvalPath = Path()
+
+    private val idleDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x307AA2F7.toInt()      // dim cyan dots
+    }
+
+    private fun buildIdleDotPattern() {
+        idleDotPath.reset()
+        idleZoneOvalPath.reset()
+        idleZoneOvalPath.addOval(zoneCX - zoneRX, zoneCY - zoneRY,
+            zoneCX + zoneRX, zoneCY + zoneRY, Path.Direction.CW)
+
+        val pitch = 3.5f * density
+        val r = 1.0f * density
+        var row = 0
+        var y = -zoneRY + pitch
+        while (y < zoneRY) {
+            val xOffset = if (row % 2 == 0) 0f else pitch / 2f
+            var x = -zoneRX + pitch + xOffset
+            while (x < zoneRX - pitch) {
+                idleDotPath.addCircle(x, y, r, Path.Direction.CW)
+                x += pitch
+            }
+            y += pitch
+            row++
+        }
+        idlePatternBuilt = true
     }
 
     private fun drawFloatingLabel(canvas: Canvas, data: RadialRenderData, accent: Int) {
@@ -443,7 +479,7 @@ class RadialRenderer(
         val baseline = y - (paint.ascent() + paint.descent()) / 2f
         canvas.drawText(text, x, baseline, paint)
     }
-    
+
     private val hudPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = spToPx(12f, context)
         textAlign = Paint.Align.LEFT
@@ -472,7 +508,7 @@ class RadialRenderer(
         hudPaint.color = FG_MUTED.toInt()
         canvas.drawText(lines, pad, viewHeight - pad, hudPaint)
     }
-    
+
     private fun glowAlpha(layer: Int): Int = 0x28 - (layer - 1) * 0x0E   // 40, 24, 8
 
     private fun drawRoundRectGlow(canvas: Canvas, rect: RectF, r: Float, color: Int) {
@@ -501,7 +537,6 @@ class RadialRenderer(
             canvas.drawPath(path, glowStrokePaint)
         }
     }
-    
 
     private fun annularSlicePath(cx: Float, cy: Float, rInner: Float, rOuter: Float, seg: Int): Path {
         val start = seg * 45f - 22.5f
@@ -533,9 +568,12 @@ class RadialRenderer(
         strokeWidth = 1.5f * density
         color = ZONE_STROKE.toInt()
     }
-    
-    /** Idle-zone glass fill — color set per frame, alpha carries the breath. */
+
+    /** Idle-zone glass fill — cyan with per-draw alpha. */
     private val glassIdlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
+
+    /** Unused right now; flip on for the soft center-glow variant. */
+    private var idleGradientInstalled = false
 }

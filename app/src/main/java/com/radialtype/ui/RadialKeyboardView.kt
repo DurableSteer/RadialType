@@ -1,6 +1,7 @@
 package com.radialtype.ui
 
 import android.content.Context
+import android.graphics.Path
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
@@ -66,17 +67,26 @@ class RadialKeyboardView(
 
     var screenOffsetX: Float = 0f
     var screenOffsetY: Float = 0f
-
-    private val zoneHintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    
+    private val zoneFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = 0x147AA2F7.toInt()      // faint glass fill
+        color = 0x127AA2F7.toInt()          // faint glass wash
     }
 
     private val zoneRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1.5f * resources.displayMetrics.density
-        color = 0x337AA2F7.toInt()      // quiet neon rim
+        color = 0x407AA2F7.toInt()          // quiet neon rim
     }
+
+    private val zoneDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x307AA2F7.toInt()          // dim lattice dots
+    }
+
+    private var zonePatternBuilt = false
+    private val zoneDotPath = Path()
+    private val zoneClipPath = Path()
 
     val state: TouchState get() = touchStateMachine.state
     val anchorX: Float get() = touchStateMachine.anchorX
@@ -97,18 +107,43 @@ class RadialKeyboardView(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (!zoneReady) return
+
+        // Static perforated-glass presentation, drawn by the pad itself.
+        // The pad window exists whenever the keyboard does, so this is
+        // stable — no dependency on overlay frames that only appear
+        // intermittently while idle.
         val inset = 2f
         val r = 12f * resources.displayMetrics.density
-        canvas.drawRoundRect(
-            inset, inset,
-            width - inset, height - inset,
-            r, r, zoneHintPaint
-        )
-        canvas.drawRoundRect(
-            inset, inset,
-            width - inset, height - inset,
-            r, r, zoneRimPaint
-        )
+
+        if (zoneDotPath.isEmpty) {
+            zoneClipPath.reset()
+            zoneClipPath.addRoundRect(inset, inset, width - inset, height - inset,
+                r, r, Path.Direction.CW)
+
+            val pitch = 3.5f * resources.displayMetrics.density
+            val dotR = 1.0f * resources.displayMetrics.density
+            var row = 0
+            var y = inset + pitch
+            while (y < height - inset) {
+                val xOff = if (row % 2 == 0) 0f else pitch / 2f
+                var x = inset + pitch + xOff
+                while (x < width - inset - pitch) {
+                    zoneDotPath.addCircle(x, y, dotR, Path.Direction.CW)
+                    x += pitch
+                }
+                y += pitch
+                row++
+            }
+        }
+
+        canvas.drawRoundRect(inset, inset, width - inset, height - inset,
+            r, r, zoneFillPaint)
+        val save = canvas.save()
+        canvas.clipPath(zoneClipPath)
+        canvas.drawPath(zoneDotPath, zoneDotPaint)
+        canvas.restoreToCount(save)
+        canvas.drawRoundRect(inset, inset, width - inset, height - inset,
+            r, r, zoneRimPaint)
     }
 
     private val touchStateMachine: TouchStateMachine = TouchStateMachine(
@@ -173,6 +208,9 @@ class RadialKeyboardView(
 
         onDeleteProgress = { left, right ->
             if (VERBOSE_LOG) Log.d(TAG, "Delete progress: -$left +$right")
+            if (left > 0 || right > 0) {
+                haptics.pulseDeleteTick()
+            }
             inputDispatcher?.previewDeleteRange(left, right)
             pushFrame()
         }
@@ -197,6 +235,7 @@ class RadialKeyboardView(
             MotionEvent.ACTION_DOWN -> {
                 resetVelocity()
                 updateVelocity(event, event.getPointerId(event.actionIndex))
+                reloadLayoutsIfChanged()
             }
             MotionEvent.ACTION_MOVE -> {
                 val idx = event.findPointerIndex(touchStateMachine.activePointerId)
@@ -204,9 +243,6 @@ class RadialKeyboardView(
             }
             MotionEvent.ACTION_UP,
             MotionEvent.ACTION_CANCEL -> resetVelocity()
-        }
-        if (event.actionMasked == MotionEvent.ACTION_DOWN && zoneReady) {
-            // ... unchanged pad-zone / reload logic
         }
         return touchStateMachine.onTouchEvent(event)
     }
@@ -271,5 +307,16 @@ class RadialKeyboardView(
         lastEvtX = event.getX(pointerIndex)
         lastEvtY = event.getY(pointerIndex)
         lastEvtT = event.eventTime
+    }
+    
+     /**
+     * Picks up layout regeneration without recreating the provider.
+     * Both maybe-reload methods short-circuit on a string compare of
+     * the stored JSON, so calling this on every ACTION_DOWN is
+     * effectively free.
+     */
+    private fun reloadLayoutsIfChanged() {
+        characterMap.maybeReload()
+        syllableProvider.maybeReloadFromLayout(SettingsManager.customLayoutJson)
     }
 }

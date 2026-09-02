@@ -4,7 +4,6 @@
     <string name="settings_activity_title">RadialType Settings</string>
     <string name="btn_enable">Enable Keyboard</string>
     <string name="btn_switch">Switch Keyboard</string>
-    <string name="btn_overlay">Allow Drawing Over Other Apps</string>
 
     <!-- Layout editor -->
     <string name="layout_editor_hint">Enter a JSON layout (lowercase letters recommended). Each ring array has 8 slots (segment 0 = east, clockwise). Tokens: ENTER, SHIFT, SPACE. Optional "digits" and "symbols" objects ({ "inner": […], "outer": […] }) customize the double-tap up/down menus.</string>

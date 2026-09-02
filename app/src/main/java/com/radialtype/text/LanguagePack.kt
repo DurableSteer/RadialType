@@ -94,6 +94,9 @@ object LayoutArranger {
 
     /** Rank 0 sits at segment 6 (north), fanning out — legacy convention. */
     val ERGONOMIC_ORDER = intArrayOf(6, 0, 7, 5, 1, 4, 2, 3)
+    
+    /** Max movable residual letters hosted on one key's menu. */
+    const val RESIDUALS_PER_HOST_MAX = 4
 
     /**
      * Package D: no tokens on the normal menu. SHIFT/DEL live in the
@@ -243,12 +246,13 @@ object LayoutArranger {
             .sortedWith(compareByDescending<ScoredEntry> { it.score }.thenBy { it.text })
 
         val syllables = LinkedHashMap<String, List<String>>()
+        // Menu slot priority: 1) own bigrams by score (speed feature),
+        // 2) hosted residual letters (coverage, tail slots only),
+        // 3) borrowed bigrams (filler for remaining capacity).
         for (letter in placed) {
             val hosted = (residualByHost[letter] ?: emptyList())
                 .sortedWith(compareByDescending<ScoredEntry> { it.score }.thenBy { it.text })
-                .take(SYLLABLES_PER_KEY)
-            val own = blended.bigramScores[letter]
-                .orEmpty()
+            val own = blended.bigramScores[letter].orEmpty()
                 .take((SYLLABLES_PER_KEY - hosted.size).coerceAtLeast(0))
 
             val used = (hosted + own).map { it.text }.toSet()
@@ -259,10 +263,8 @@ object LayoutArranger {
                     .take(borrowQuota)
             } else emptyList()
 
-            val ranked = (hosted + own + borrowed)
-                .sortedWith(compareByDescending<ScoredEntry> { it.score }.thenBy { it.text })
-                .map { it.text }
-            if (ranked.isNotEmpty()) syllables[letter] = ranked
+            val menu = own + hosted + borrowed
+            if (menu.isNotEmpty()) syllables[letter] = menu.map { it.text }
         }
 
         return GeneratedLayout(
@@ -275,6 +277,23 @@ object LayoutArranger {
         )
     }
 
+        /**
+     * Opportunity-cost hosting of residual letters.
+     *
+     * Letters with a derivable base (ä→A) or explicit override (ß→S) stay
+     * pinned to that mnemonic host. Everything else is distributed over
+     * the placed keys where it displaces the least valuable bigram: for
+     * each candidate host we compute the score of the single bigram that
+     * would drop off the menu's tail if one more residual landed there,
+     * and each residual goes to the cheapest marginal slot. A per-host
+     * cap keeps any menu from becoming a junk drawer.
+     *
+     * Keys whose own bigram list is shorter than SYLLABLES_PER_KEY host
+     * residuals for free (marginal cost 0) until the menu is full —
+     * sparse menus absorb before dense ones pay. Assignment is fully
+     * deterministic: residuals processed alphabetically, hosts scanned
+     * alphabetically, strict cost comparison with first-wins ties.
+     */
     private fun assignHosts(
         residual: List<String>,
         placed: List<String>,
@@ -282,33 +301,52 @@ object LayoutArranger {
     ): Map<String, List<ScoredEntry>> {
         if (residual.isEmpty() || placed.isEmpty()) return emptyMap()
 
-        // Bigram second char → candidate host keys (placed, iteration order).
-        val hostsBySecond = HashMap<String, MutableList<String>>()
-        for (host in placed) {
-            for (entry in blended.bigramScores[host].orEmpty()) {
-                if (entry.text.length == 2) {
-                    hostsBySecond.getOrPut(entry.text.substring(1)) { mutableListOf() }.add(host)
-                }
-            }
-        }
-
         val result = LinkedHashMap<String, MutableList<ScoredEntry>>()
+
+        // 1. Mnemonic pinning: base letter / explicit override wins.
+        val movable = mutableListOf<String>()
         for (letter in residual) {
-            val base = baseLetter(letter)
             val override = HOST_OVERRIDES[letter]
-            val preferred: String? = when {
+            val base = baseLetter(letter)
+            val pinned = when {
                 override != null && override in placed -> override
                 base.isNotEmpty() && base != letter && base in placed -> base
-                else -> hostsBySecond[letter]
-                    ?.maxByOrNull { blended.letterScores.getOrDefault(it, 0.0) }
+                else -> null
             }
+            if (pinned != null) {
+                result.getOrPut(pinned) { mutableListOf() }
+                    .add(ScoredEntry(letter, blended.letterScores[letter] ?: 0.0, isResidualLetter = true))
+            } else {
+                movable.add(letter)
+            }
+        }
+        if (movable.isEmpty()) return result
 
-            val host: String? = when {
-                preferred != null && (result[preferred]?.size ?: 0) < SYLLABLES_PER_KEY -> preferred
-                else -> placed.minByOrNull { result[it]?.size ?: 0 }
+        // 2. Greedy marginal-cost assignment for the movable residuals.
+        fun marginalCost(host: String, alreadyHosting: Int): Double {
+            val keep = (SYLLABLES_PER_KEY - alreadyHosting - 1).coerceAtLeast(0)
+            return blended.bigramScores[host].orEmpty()
+                .drop(keep).take(1).sumOf { it.score }
+        }
+
+        for (letter in movable.sorted()) {
+            var bestHost: String? = null
+            var bestCost = Double.MAX_VALUE
+            for (host in placed.sorted()) {
+                val load = result[host]?.count { it.isResidualLetter } ?: 0
+                if (load >= RESIDUALS_PER_HOST_MAX) continue
+                val cost = marginalCost(host, load)
+                if (cost < bestCost) {
+                    bestCost = cost
+                    bestHost = host
+                }
             }
-            if (host != null) {
-                result.getOrPut(host) { mutableListOf() }
+            if (bestHost == null) {
+                // Every host is at cap — fall back to lightest menu.
+                bestHost = placed.minByOrNull { result[it]?.size ?: 0 }
+            }
+            if (bestHost != null) {
+                result.getOrPut(bestHost) { mutableListOf() }
                     .add(ScoredEntry(letter, blended.letterScores[letter] ?: 0.0, isResidualLetter = true))
             }
         }

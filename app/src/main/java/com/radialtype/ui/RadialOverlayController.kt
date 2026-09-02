@@ -2,7 +2,7 @@ package com.radialtype.ui
 
 import android.content.Context
 import android.graphics.PixelFormat
-import android.util.Log
+import android.os.IBinder
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.WindowManager
@@ -12,15 +12,19 @@ import com.radialtype.text.SyllableProvider
 import com.radialtype.engine.TouchStateMachine
 import com.radialtype.settings.SettingsManager
 
-
 /**
  * Owns the two-window setup: a small touchable pad and a lazy fullscreen
- * render layer. Module 11 adds the InputDispatcher; Module 12 ensures
- * SettingsManager is initialized so runtime settings work immediately.
+ * render layer. Both are attached as subwindows of the IME's own window
+ * token (TYPE_APPLICATION_ATTACHED_DIALOG), which means:
+ * - No SYSTEM_ALERT_WINDOW / overlay permission is required.
+ * - They inherit the IME's z-order and are hidden/destroyed atomically
+ *   with the IME window — no ghost overlays surviving app switches.
+ * - The explicit [hide] teardown remains as a belt-and-braces backup.
  */
 class RadialOverlayController(
     private val context: Context,
-    inputConnectionProvider: () -> android.view.inputmethod.InputConnection?
+    inputConnectionProvider: () -> android.view.inputmethod.InputConnection?,
+    private val anchorTokenProvider: () -> IBinder?
 ) {
 
     companion object {
@@ -47,6 +51,9 @@ class RadialOverlayController(
     private var padAdded = false
     private var overlayAdded = false
 
+    /** Token of the IME window the subwindows are attached to. */
+    private var anchorToken: IBinder? = null
+
     init {
         // Ensure SettingsManager has a context for SharedPreferences reads
         if (!SettingsManager.isInitialized) {
@@ -62,6 +69,18 @@ class RadialOverlayController(
         inputDispatcher.currentEditorInfo = info
     }
 
+    /**
+     * Binds the child windows to the given IME window token. When the
+     * token changes (IME window recreated across a session switch), any
+     * existing children are torn down first — they belonged to the old
+     * window and would otherwise leak exactly like an overlay would.
+     */
+    fun setAnchorToken(token: IBinder?) {
+        if (token == anchorToken) return
+        if (anchorToken != null) hide()
+        anchorToken = token
+    }
+
     private fun onFrame(data: RadialRenderData) {
         val active = data.state != TouchStateMachine.TouchState.IDLE &&
             data.state != TouchStateMachine.TouchState.AXIS_PENDING
@@ -74,10 +93,7 @@ class RadialOverlayController(
 
     fun show() {
         if (padAdded) return
-        if (!android.provider.Settings.canDrawOverlays(context)) {
-            Log.w("RadialOverlay", "Overlay permission missing")
-            return
-        }
+        val token = anchorToken ?: anchorTokenProvider() ?: return
 
         val dm = context.resources.displayMetrics
         val screenW = dm.widthPixels.toFloat()
@@ -102,11 +118,12 @@ class RadialOverlayController(
         val padParams = WindowManager.LayoutParams(
             (rxPx * 2f).toInt(),
             (ryPx * 2f).toInt(),
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            this.token = token
             x = (zoneCX - rxPx).toInt()
             y = (zoneCY - ryPx).toInt()
         }
@@ -116,14 +133,17 @@ class RadialOverlayController(
 
     private fun addOverlayWindow() {
         if (overlayAdded) return
+        val token = anchorToken ?: return
         val overlayParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG,
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
-        )
+        ).apply {
+            this.token = token
+        }
         wm.addView(overlayView, overlayParams)
         overlayAdded = true
     }
@@ -134,6 +154,11 @@ class RadialOverlayController(
         overlayAdded = false
     }
 
+    /**
+     * Full teardown: reset gesture state, then remove BOTH windows.
+     * With token-attached children the system removes them with the IME
+     * window anyway — this is the manual backstop for lifecycle edges.
+     */
     fun hide() {
         padView.resetGesture()
         removeOverlayWindow()

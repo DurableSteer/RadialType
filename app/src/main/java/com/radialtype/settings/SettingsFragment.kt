@@ -29,21 +29,6 @@ class SettingsFragment : PreferenceFragmentCompat() {
                 true
             }
 
-        findPreference<Preference>(SettingsManager.KEY_OVERLAY_PERMISSION)?.let { pref ->
-            pref.setOnPreferenceClickListener {
-                if (!Settings.canDrawOverlays(requireContext())) {
-                    startActivity(
-                        Intent(
-                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.parse("package:${requireContext().packageName}")
-                        )
-                    )
-                }
-                true
-            }
-            pref.isVisible = !Settings.canDrawOverlays(requireContext())
-        }
-
         findPreference<Preference>(SettingsManager.KEY_REGENERATE_LAYOUT)
             ?.setOnPreferenceClickListener {
                 regenerateLayout()
