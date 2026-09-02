@@ -124,7 +124,7 @@ class LanguagePackTest {
         val scores = ('A'..'P').withIndex().associate { (i, c) -> "$c" to (20.0 - i).toDouble() }
         val layout = LayoutArranger.generate(blendedFromScores(scores), "test", 1.0)
         assertFalse(layout.inner.contains(CharacterMap.TOKEN_SHIFT))
-        assertFalse(layout.outer.contains(CharacterMap.TOKEN_DEL))
+        assertFalse(layout.outer.contains(CharacterMap.TOKEN_ENTER))
         assertEquals(16, layout.inner.count { it.isNotEmpty() } + layout.outer.count { it.isNotEmpty() })
         assertTrue(layout.residualLetters.isEmpty())
     }
@@ -136,11 +136,10 @@ class LanguagePackTest {
             blendedFromScores(scores), "test", 1.0,
             reservedOuterSegments = mapOf(
                 2 to CharacterMap.TOKEN_SHIFT,
-                3 to CharacterMap.TOKEN_DEL
             )
         )
         assertEquals(CharacterMap.TOKEN_SHIFT, layout.outer[2])
-        assertEquals(CharacterMap.TOKEN_DEL, layout.outer[3])
+
         val lettersPlaced = layout.inner.count { it.isNotEmpty() } +
             layout.outer.count { it.isNotEmpty() } - 2
         assertEquals(14, lettersPlaced)
@@ -276,15 +275,13 @@ class LanguagePackTest {
             layout.syllables.entries.firstOrNull { it.value.contains("ß") }?.key
         )
     }
-
-    // ── Package D — no token reservations, borrow-fill ───────────
-
+    
     @Test
     fun `generated layout carries special tokens for the symbols menu`() {
         val scores = ('A'..'H').associate { c -> "$c" to 1.0 }
         val layout = LayoutArranger.generate(blendedFromScores(scores), "t", 1.0)
         assertEquals(
-            listOf(CharacterMap.TOKEN_SHIFT, CharacterMap.TOKEN_DEL),
+            listOf(CharacterMap.TOKEN_SHIFT, CharacterMap.TOKEN_ENTER, CharacterMap.TOKEN_SPACE),
             layout.symbolTokens
         )
     }

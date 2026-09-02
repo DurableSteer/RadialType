@@ -30,8 +30,9 @@ object SettingsManager {
     const val KEY_OPEN_LAYOUT_EDITOR = "open_layout_editor"
     const val KEY_ENABLE_KEYBOARD_BUTTON = "enable_keyboard_button"
     const val KEY_OVERLAY_PERMISSION = "overlay_permission"
+    const val KEY_PERF_HUD = "perf_hud"
 
-    // Module 15 — language packs
+    //   language packs
     const val KEY_LANGUAGE_PRIMARY = "language_primary"
     const val KEY_LANGUAGE_SECONDARY = "language_secondary"
     const val KEY_LANGUAGE_MIX_RATIO = "language_mix_ratio"
@@ -53,25 +54,24 @@ object SettingsManager {
     // Stored in tenths: slider 1..100 → 0.1..10.0 chars/mm.
     const val DELETE_RATE_MIN = 1
     const val DELETE_RATE_MAX = 100
-    const val DELETE_RATE_DEFAULT = 10
+    const val DELETE_RATE_DEFAULT = 30
 
-    const val INNER_RING_MIN = 30f
-    const val INNER_RING_MAX = 100f
-    const val INNER_RING_DEFAULT = 40f
+    const val INNER_RING_MIN = 40f
+    const val INNER_RING_MAX = 140f
+    const val INNER_RING_DEFAULT = 70f
 
-    const val OUTER_RING_MIN = 60f
-    const val OUTER_RING_MAX = 200f
-    const val OUTER_RING_DEFAULT = 100f
+    const val OUTER_RING_MIN = 80f
+    const val OUTER_RING_MAX = 240f
+    const val OUTER_RING_DEFAULT = 115f
 
-    const val DEADZONE_MIN = 5f
-    const val DEADZONE_MAX = 50f
-    const val DEADZONE_DEFAULT = 25f
+    const val DEADZONE_MIN = 10f
+    const val DEADZONE_MAX = 60f
+    const val DEADZONE_DEFAULT = 15f
 
-    // Module 15 — mix ratio bounds. Stored as percent 0..100
     // (0 = 100% secondary language, 100 = 100% primary language).
     const val LANGUAGE_MIX_MIN = 0
     const val LANGUAGE_MIX_MAX = 100
-    const val LANGUAGE_MIX_DEFAULT = 70
+    const val LANGUAGE_MIX_DEFAULT = 60
 
     @Volatile
     private var appContext: Context? = null
@@ -90,6 +90,10 @@ object SettingsManager {
     var debugMode: Boolean
         get() = prefs?.getBoolean(KEY_DEBUG_MODE, true) ?: true
         set(value) = put { it.putBoolean(KEY_DEBUG_MODE, value) }
+        
+    var perfHud: Boolean
+        get() = prefs?.getBoolean(KEY_PERF_HUD, false) ?: false
+        set(value) = put { it.putBoolean(KEY_PERF_HUD, value) }
 
     var hapticsEnabled: Boolean
         get() = prefs?.getBoolean(KEY_HAPTICS, true) ?: true
@@ -191,7 +195,7 @@ object SettingsManager {
 
     /** Blend weight of the PRIMARY language, 0..100 percent. */
     var languageMixPercent: Int
-        get() = clamp(prefs?.getInt(KEY_LANGUAGE_MIX_RATIO, 70) ?: 70,
+        get() = clamp(prefs?.getInt(KEY_LANGUAGE_MIX_RATIO, 60) ?: 60,
             LANGUAGE_MIX_MIN, LANGUAGE_MIX_MAX)
         set(value) = put { it.putInt(KEY_LANGUAGE_MIX_RATIO, clamp(value, LANGUAGE_MIX_MIN, LANGUAGE_MIX_MAX)) }
 

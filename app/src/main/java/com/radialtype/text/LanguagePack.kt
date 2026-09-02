@@ -324,29 +324,56 @@ object LayoutArranger {
 class GeneratedLayout(
     val inner: List<String>,
     val outer: List<String>,
-    /** Key letter (uppercase) → ranked entries, ≤ 8 each; may mix letters and bigrams. */
+    /** Key letter (uppercase) → ranked entries, ≤ 16 each; may mix letters and bigrams. */
     val syllables: Map<String, List<String>>,
     val languagesTag: String,
     val mixWeight: Double,
     /** Letters that lost primary placement, most frequent first. */
     val residualLetters: List<String> = emptyList(),
-    /** Entries for the special-characters menu (SHIFT, DEL). */
-    val symbolTokens: List<String> = listOf(CharacterMap.TOKEN_SHIFT, CharacterMap.TOKEN_DEL)
+    /** Function keys carried on the special-characters menu. */
+    val symbolTokens: List<String> = listOf(
+        CharacterMap.TOKEN_SHIFT,
+        CharacterMap.TOKEN_ENTER,
+        CharacterMap.TOKEN_SPACE
+    )
 ) {
-    fun toJson(): String {
+        fun toJson(): String {
+        fun lower(s: String): String = if (s.length <= 2) s.lowercase() else s
+
         val root = JSONObject()
-        root.put("inner", JSONArray(inner))
-        root.put("outer", JSONArray(outer))
+        root.put("inner", JSONArray(inner.map { lower(it) }))
+        root.put("outer", JSONArray(outer.map { lower(it) }))
         root.put("syllables", JSONObject().apply {
-            syllables.forEach { (key, list) -> put(key, JSONArray(list)) }
+            syllables.forEach { (key, list) ->
+                put(lower(key), JSONArray(list.map { lower(it) }))
+            }
         })
         if (symbolTokens.isNotEmpty()) {
-            val symbols = arrayOfNulls<String>(8)
-            LayoutArranger.ERGONOMIC_ORDER.copyOf(symbolTokens.size)
-                .forEachIndexed { i, seg -> symbols[seg] = symbolTokens[i] }
+            val innerPlacement = mapOf(
+                CharacterMap.TOKEN_ENTER to 0,
+                CharacterMap.TOKEN_SPACE to 2,
+                CharacterMap.TOKEN_TAB to 5,
+                CharacterMap.TOKEN_SHIFT to 6,
+                CharacterMap.TOKEN_ESC to 7
+            )
+            val outerPlacement = mapOf(
+                CharacterMap.TOKEN_RIGHT to 0,
+                CharacterMap.TOKEN_DOWN to 2,
+                CharacterMap.TOKEN_LEFT to 4,
+                CharacterMap.TOKEN_UP to 6
+            )
+            // Start from the curated defaults (punctuation in the free
+            // slots), then guarantee every requested token sits at its
+            // canonical segment even if the defaults ever change.
+            val symbolsInner = CharacterMap.DEFAULT_SYMBOLS_INNER.toMutableList()
+            val symbolsOuter = CharacterMap.DEFAULT_SYMBOLS_OUTER.toMutableList()
+            symbolTokens.forEach { token ->
+                innerPlacement[token]?.let { seg -> symbolsInner[seg] = token }
+                outerPlacement[token]?.let { seg -> symbolsOuter[seg] = token }
+            }
             root.put("symbols", JSONObject().apply {
-                put("inner", JSONArray(symbols.map { it ?: "" }))
-                put("outer", JSONArray(List(8) { "" }))
+                put("inner", JSONArray(symbolsInner))
+                put("outer", JSONArray(symbolsOuter))
             })
         }
         root.put("meta", JSONObject().apply {

@@ -10,6 +10,12 @@
             android:summary="Draw the radial menu overlay while typing"
             android:defaultValue="true" />
     </PreferenceCategory>
+    
+    <SwitchPreferenceCompat
+            android:key="perf_hud"
+            android:title="Performance HUD"
+            android:summary="Show fps, frame time, draw cost, input latency and event rate at the bottom"
+            android:defaultValue="false" />
 
     <PreferenceCategory android:title="Typing">
         <SwitchPreferenceCompat
@@ -84,7 +90,7 @@
             android:key="delete_chars_per_mm"
             android:title="Characters per mm (delete)"
             android:summary="How many characters are selected per millimetre of horizontal swipe (0.1 – 10.0)"
-            android:defaultValue="10"
+            android:defaultValue="30"
             app:min="1"
             android:max="100"
             app:showSeekBarValue="true" />
@@ -95,25 +101,25 @@
             android:key="deadzone_radius"
             android:title="Deadzone size (dp)"
             android:summary="Radius of the centre zone where no character is selected"
-            android:defaultValue="25"
+            android:defaultValue="10"
             app:min="5"
             android:max="50"
             app:showSeekBarValue="true" />
 
         <SeekBarPreference
             android:key="inner_ring_radius"
-            android:title="Inner ring radius (dp)"
-            android:summary="Deadzone edge; inner ring starts here"
-            android:defaultValue="40"
+            android:title="Inner ring outer edge (dp)"
+            android:summary="Outside radius of the inner row — lowering it squishes the inner ring"
+            android:defaultValue="70"
             app:min="30"
             android:max="100"
             app:showSeekBarValue="true" />
 
         <SeekBarPreference
             android:key="outer_ring_radius"
-            android:title="Outer ring radius (dp)"
-            android:summary="Inner/outer ring boundary"
-            android:defaultValue="100"
+            android:title="Outer ring outer edge (dp)"
+            android:summary="Outermost radius of the menu — lowering it squishes the outer row"
+            android:defaultValue="115"
             app:min="60"
             android:max="200"
             app:showSeekBarValue="true" />
@@ -140,7 +146,7 @@
             android:key="language_mix_ratio"
             android:title="Mix ratio (%)"
             android:summary="Weight of the PRIMARY language; remainder goes to the secondary"
-            android:defaultValue="70"
+            android:defaultValue="60"
             app:min="0"
             android:max="100"
             app:showSeekBarValue="true" />

@@ -55,6 +55,11 @@ class RadialOverlayController(
         renderer.debugMode = true
     }
 
+    /** Called by the IME on every input session so ENTER can resolve the field's editor action. */
+    fun setEditorInfo(info: android.view.inputmethod.EditorInfo?) {
+        inputDispatcher.currentEditorInfo = info
+    }
+
     private fun onFrame(data: RadialRenderData) {
         val active = data.state != com.radialtype.engine.TouchStateMachine.TouchState.IDLE
         if (active && !overlayAdded) addOverlayWindow()

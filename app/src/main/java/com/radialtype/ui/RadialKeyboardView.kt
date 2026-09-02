@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.util.Log
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import com.radialtype.engine.GeometryEngine
@@ -42,6 +43,8 @@ class RadialKeyboardView(
 
     companion object {
         private const val TAG = "RadialKeyboardView"
+        private const val LABEL_LEAD_MS = 32f
+        private const val MAX_LEAD_PX = 100f   // safety cap for flings
     }
 
     var onRenderFrame: ((RadialRenderData) -> Unit)? = null
@@ -125,17 +128,16 @@ class RadialKeyboardView(
             Log.d(TAG, "Commit (seg=$currentSegment ring=$currentRing label=$label)")
             when (label) {
                 CharacterMap.TOKEN_SPACE -> inputDispatcher?.commitSpace()
-                CharacterMap.TOKEN_SHIFT -> {
-                    // Toggle auto-capitalization for subsequent commits.
-                    SettingsManager.autoCapitalization = !SettingsManager.autoCapitalization
-                }
-                // DEL never reaches here as a normal commit: entering
-                // DELETE mode replaces the selection below. An empty
-                // label or DEL falling through does nothing.
+                CharacterMap.TOKEN_ENTER -> inputDispatcher?.commitEnter()
+                CharacterMap.TOKEN_SHIFT -> inputDispatcher?.shiftNext()
+                CharacterMap.TOKEN_TAB   -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_TAB)
+                CharacterMap.TOKEN_ESC   -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_ESCAPE)
+                CharacterMap.TOKEN_LEFT  -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_LEFT)
+                CharacterMap.TOKEN_RIGHT -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_RIGHT)
+                CharacterMap.TOKEN_UP    -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_UP)
+                CharacterMap.TOKEN_DOWN  -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_DOWN)
             }
-            if (label.isNotEmpty() && label != CharacterMap.TOKEN_SPACE &&
-                !characterMap.isFunctionKey(label)
-            ) {
+            if (label.isNotEmpty() && !characterMap.isFunctionKey(label)) {
                 inputDispatcher?.commit(label)
             }
         }
@@ -158,16 +160,6 @@ class RadialKeyboardView(
         onSegmentChanged = { segment ->
             Log.d(TAG, "Segment changed -> $segment")
             selectionTracker.update(currentRing, currentSegment)
-
-            // DEL-key entry path: the moment the finger selects a DEL key
-            // in PRIMARY, switch to delete mode (finger stays down).
-            // Note: `enterDeleteFromKey` resolves to the state machine's
-            // own method via the apply-block receiver — no qualifier.
-            if (state == TouchState.PRIMARY &&
-                characterMap.getPrimaryChar(currentRing, segment) == CharacterMap.TOKEN_DEL
-            ) {
-                enterDeleteFromKey()
-            }
         }
 
         onDeleteProgress = { left, right ->
@@ -192,22 +184,40 @@ class RadialKeyboardView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                resetVelocity()
+                updateVelocity(event)
+            }
+            MotionEvent.ACTION_MOVE -> updateVelocity(event)
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> resetVelocity()
+        }
         if (event.actionMasked == MotionEvent.ACTION_DOWN && zoneReady) {
             val dx = event.x - width / 2f
             val dy = event.y - height / 2f
             val nx = dx / zoneRX
             val ny = dy / zoneRY
             if (nx * nx + ny * ny > 1f) return false
+            requestUnbufferedDispatch(event)
             touchStateMachine.refreshFromSettings()
             characterMap.maybeReload()
-            // Module 15: propagate generated syllable overrides from any
-            // regenerated layout, gated by string-compare like the map.
             syllableProvider.maybeReloadFromLayout(SettingsManager.customLayoutJson)
         }
         return touchStateMachine.onTouchEvent(event)
     }
 
     fun pushFrame() {
+        // Predicted position for the floating label only. The ring/segment
+        // geometry deliberately uses the raw touch position.
+        var leadX = velX * LABEL_LEAD_MS
+        var leadY = velY * LABEL_LEAD_MS
+        val leadMag = Math.hypot(leadX.toDouble(), leadY.toDouble()).toFloat()
+        if (leadMag > MAX_LEAD_PX) {
+            leadX *= MAX_LEAD_PX / leadMag
+            leadY *= MAX_LEAD_PX / leadMag
+        }
+        
         onRenderFrame?.invoke(
             RadialRenderData(
                 state = touchStateMachine.state,
@@ -221,10 +231,40 @@ class RadialKeyboardView(
                 segment = selectionTracker.currentSegment,
                 primaryChar = selectionTracker.currentPrimaryChar,
                 label = selectionTracker.currentLabel(),
+                labelX = touchStateMachine.currentX + screenOffsetX + leadX,
+                labelY = touchStateMachine.currentY + screenOffsetY + leadY,
                 deleteLeftCount = touchStateMachine.deleteLeftCount,
                 deleteRightCount = touchStateMachine.deleteRightCount,
                 mode = touchStateMachine.activeMode
             )
         )
+    }
+    
+    // ── Velocity tracking for label prediction ───────────────────
+    private var lastEvtX = 0f
+    private var lastEvtY = 0f
+    private var lastEvtT = 0L
+    private var velX = 0f
+    private var velY = 0f
+
+    private fun resetVelocity() {
+        velX = 0f
+        velY = 0f
+        lastEvtT = 0L
+    }
+
+    private fun updateVelocity(event: MotionEvent) {
+        val dt = (event.eventTime - lastEvtT).toFloat()
+        if (dt > 0f && lastEvtT != 0L) {
+            val ix = (event.x - lastEvtX) / dt
+            val iy = (event.y - lastEvtY) / dt
+            // Light exponential smoothing so a single noisy sample
+            // can't fling the prediction box off-screen.
+            velX = velX * 0.6f + ix * 0.4f
+            velY = velY * 0.6f + iy * 0.4f
+        }
+        lastEvtX = event.x
+        lastEvtY = event.y
+        lastEvtT = event.eventTime
     }
 }

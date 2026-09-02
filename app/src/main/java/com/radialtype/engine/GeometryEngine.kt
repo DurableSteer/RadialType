@@ -46,11 +46,23 @@ class GeometryEngine(
     /**
      * Pulls current ring radii from [SettingsManager] so user-adjusted
      * sliders take effect live. Safe to call on every touch-down.
+     *
+     * Semantics:
+     * - deadzoneRadius  → outer edge of the centre deadzone (inner edge
+     *                     of the inner ring)
+     * - innerRingRadius → outer edge of the INNER ring (inner/outer
+     *                     boundary); shrinking it squishes the inner row
+     * - outerRingRadius → outer edge of the OUTER ring; shrinking it
+     *                     squishes the outer row
+     *
+     * Ordering is enforced: deadzone < inner boundary < outer boundary,
+     * with a minimum 20 dp band so a ring can never collapse to zero
+     * width even with contradictory slider values.
      */
     fun refreshFromSettings() {
         deadZoneRadius = SettingsManager.deadzoneRadius
-        innerRadiusMax = SettingsManager.outerRingRadius
-        outerRadiusMax = SettingsManager.outerRingMaxRadius
+        innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
+        outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
     }
 
     /**

@@ -26,49 +26,69 @@ import org.json.JSONObject
  */
 class CharacterMap(context: Context? = null) {
 
-    companion object {
-        val DEFAULT_INNER = listOf("T", "N", "S", "R", "H", "L", "D", "C")
-        val DEFAULT_OUTER = listOf("A", "E", "I", "O", "U", "W", "F", "G")
+  companion object {
+    // ── Function tokens (must precede any list that references them) ──
+    const val TOKEN_ENTER = "ENTER"
+    const val TOKEN_SHIFT = "SHIFT"
+    const val TOKEN_SPACE = "SPACE"
+    const val TOKEN_TAB = "TAB"
+    const val TOKEN_ESC = "ESC"
+    const val TOKEN_LEFT = "LEFT"
+    const val TOKEN_RIGHT = "RIGHT"
+    const val TOKEN_UP = "UP"
+    const val TOKEN_DOWN = "DOWN"
 
-        /** Digits: inner 1–8, outer segments 0/1 hold 9 and 0. */
-        val DEFAULT_DIGITS_INNER = listOf("1", "2", "3", "4", "5", "6", "7", "8")
-        val DEFAULT_DIGITS_OUTER = listOf("9", "0", "", "", "", "", "", "")
+    const val RING_SIZE = 8
 
-        /** Symbols, roughly frequency-ordered for prose. */
-        val DEFAULT_SYMBOLS_INNER = listOf(".", ",", "'", "-", "?", "!", "\"", ":")
-        val DEFAULT_SYMBOLS_OUTER = listOf(";", "(", ")", "@", "#", "&", "/", "+")
+    val DEFAULT_INNER = listOf("t", "n", "s", "r", "h", "l", "d", "c")
+    val DEFAULT_OUTER = listOf("a", "e", "i", "o", "u", "w", "f", "g")
 
-        val DEFAULT_JSON: String = buildLayoutJson(
-            DEFAULT_INNER, DEFAULT_OUTER, null, null
-        )
+    /**
+     * Digits: inner 1–8; outer keeps 9/0 on segments 0/1 and fills the
+     * remaining slots (ergonomic order: 6, 7, 5, 4, 3, 2) with math
+     * symbols: * + - / ( ).
+     */
+    val DEFAULT_DIGITS_INNER = listOf("1", "2", "3", "4", "5", "6", "7", "8")
+    val DEFAULT_DIGITS_OUTER = listOf("9", "0", ")", "(", "/", "-", "*", "+")
 
-        private fun buildLayoutJson(
-            inner: List<String>, outer: List<String>,
-            digitsInner: List<String>?, symbolsInner: List<String>?
-        ): String {
-            val root = JSONObject()
-            root.put("inner", JSONArray(inner))
-            root.put("outer", JSONArray(outer))
-            if (digitsInner != null) {
-                root.put("digits", JSONObject().apply {
-                    put("inner", JSONArray(digitsInner))
-                    put("outer", JSONArray(DEFAULT_DIGITS_OUTER))
-                })
-            }
-            if (symbolsInner != null) {
-                root.put("symbols", JSONObject().apply {
-                    put("inner", JSONArray(symbolsInner))
-                    put("outer", JSONArray(DEFAULT_SYMBOLS_OUTER))
-                })
-            }
-            return root.toString()
+    /**
+     * Symbol menu: ENTER at 0 (east), SPACE at 2 (south), SHIFT at 6
+     * (north) are fixed. The five free inner slots (7, 5, 1, 4, 3, in
+     * ergonomic order) and all eight outer slots carry the curated
+     * special characters, in priority order: . , " ? @ : $ ! ; { } & =
+     */
+    val DEFAULT_SYMBOLS_INNER = listOf(
+        TOKEN_ENTER, "\"", TOKEN_SPACE, "@", "?", ",", TOKEN_SHIFT, "."
+    )
+    val DEFAULT_SYMBOLS_OUTER = listOf(
+        "$", "{", "&", "=", "}", ";", ":", "!"
+    )
+
+    val DEFAULT_JSON: String = buildLayoutJson(
+        DEFAULT_INNER, DEFAULT_OUTER, null, null
+    )
+
+    private fun buildLayoutJson(
+        inner: List<String>, outer: List<String>,
+        digitsInner: List<String>?, symbolsInner: List<String>?
+    ): String {
+        val root = JSONObject()
+        root.put("inner", JSONArray(inner))
+        root.put("outer", JSONArray(outer))
+        if (digitsInner != null) {
+            root.put("digits", JSONObject().apply {
+                put("inner", JSONArray(digitsInner))
+                put("outer", JSONArray(DEFAULT_DIGITS_OUTER))
+            })
         }
-
-        const val TOKEN_DEL = "DEL"
-        const val TOKEN_SHIFT = "SHIFT"
-        const val TOKEN_SPACE = "SPACE"
-
-        const val RING_SIZE = 8
+        if (symbolsInner != null) {
+            root.put("symbols", JSONObject().apply {
+                put("inner", JSONArray(symbolsInner))
+                put("outer", JSONArray(DEFAULT_SYMBOLS_OUTER))
+            })
+        }
+        return root.toString()
+    }
     }
 
     var innerRingChars: List<String> = DEFAULT_INNER
@@ -163,7 +183,10 @@ class CharacterMap(context: Context? = null) {
 
     /** True when the given label is a function key token. */
     fun isFunctionKey(label: String): Boolean =
-        label == TOKEN_DEL || label == TOKEN_SHIFT || label == TOKEN_SPACE
+        label == TOKEN_ENTER || label == TOKEN_SHIFT || label == TOKEN_SPACE ||
+            label == TOKEN_TAB || label == TOKEN_ESC ||
+            label == TOKEN_LEFT || label == TOKEN_RIGHT ||
+            label == TOKEN_UP || label == TOKEN_DOWN
 
     fun loadFromJson(json: String) {
         try {

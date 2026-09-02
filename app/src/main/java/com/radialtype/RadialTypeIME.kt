@@ -30,6 +30,7 @@ class RadialTypeIME : InputMethodService() {
     ) {
         super.onStartInputView(info, restarting)
         window?.window?.setLayout(1, 1)
+        overlayController?.setEditorInfo(info)
         overlayController?.show()
     }
 

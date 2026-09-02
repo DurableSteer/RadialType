@@ -1,7 +1,7 @@
 package com.radialtype.ui
 
+import java.util.Locale
 import android.content.Context
-import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Paint
@@ -33,18 +33,15 @@ class RadialRenderData(
     val segment: Int,
     val primaryChar: String,
     val label: String,
+    val labelX: Float = currentX,
+    val labelY: Float = currentY,
     val deleteLeftCount: Int = 0,
     val deleteRightCount: Int = 0,
-    val mode: com.radialtype.engine.LayoutMode = com.radialtype.engine.LayoutMode.LETTERS
+    val mode: com.radialtype.engine.LayoutMode = com.radialtype.engine.LayoutMode.LETTERS,
+    val pushTimeMs: Long = android.os.SystemClock.uptimeMillis()
 )
 
-/**
- * Module 10 — Tokyo Night neon renderer.
- *
- * PRIMARY = cyan accent, SECONDARY = magenta, identical ring geometry.
- * DELETE state: no radial menu. The touch zone glows red and a live
- * counter shows the pending deletion (← left / → right).
- */
+
 class RadialRenderer(
     context: Context,
     private val characterMap: CharacterMap,
@@ -54,29 +51,27 @@ class RadialRenderer(
     companion object {
         const val LABEL_OFFSET_PX = 160f
 
-        private const val FLOATING_TEXT_SP = 48f
+        private const val FLOATING_TEXT_SP = 36f
         private const val MENU_LABEL_SP = 20f
 
-        // ── Tokyo Night palette ──────────────────────────────────
+        // ── Tokyo Night palette (high contrast) ──────────────────
         private const val CYAN = 0xFF7AA2F7L
         private const val MAGENTA = 0xFFBB9AF7L
-        private const val FG_MUTED = 0xE6A9B1D6L
+        private const val FG_MUTED = 0xFFC0CAF5L          // brighter cell text
         private const val FG_BRIGHT = 0xFFF5EBFAL
-        private const val PANEL_BASE = 0xE01A1B26L
-        private const val PANEL_ACTIVE_ALPHA = 0x66000000
+        private const val PANEL_BASE = 0xFF1A1B26L        // opaque sector fill
+        private const val CELL_BORDER = 0x66565F89L       // backdrop outline
         private const val DEAD_FILL = 0xF2161616L
         private const val DEAD_RIM = 0x66F7768EL
         private const val ZONE_STROKE = 0x597AA2F7L
 
-        /** Tokyo Night red for delete-mode feedback. */
         private const val DELETE_RED = 0xFFF7768EL
-        /** Tokyo Night green for number mode. */
         private const val NUMBER_GREEN = 0xFF9ECE6AL
-        /** Tokyo Night yellow for symbol mode. */
         private const val SYMBOL_YELLOW = 0xFFE0AF68L
     }
 
     var debugMode: Boolean = true
+    var perfHud: PerfHud? = null
     var showIdleZoneHint: Boolean = true
 
     var deadZoneRadius: Float = GeometryEngine.DEAD_ZONE_RADIUS
@@ -99,10 +94,8 @@ class RadialRenderer(
         strokeWidth = 2f * density
     }
 
-    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val glowStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 5f * density
-        maskFilter = BlurMaskFilter(8f * density, BlurMaskFilter.Blur.NORMAL)
     }
 
     private val deadFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -119,6 +112,22 @@ class RadialRenderer(
     private val deleteWashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = 0x2BF7768E.toInt()
+    }
+
+    private val cellBackdropPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = PANEL_BASE.toInt()
+    }
+
+    private val cellBackdropStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1f * density
+        color = CELL_BORDER.toInt()
+    }
+
+    private val floatingPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = PANEL_BASE.toInt()
     }
 
     private val menuLabelPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -141,11 +150,10 @@ class RadialRenderer(
     }
 
     fun render(canvas: Canvas, data: RadialRenderData) {
-        // Live-sync configurable geometry each frame.
         if (SettingsManager.isInitialized) {
             deadZoneRadius = SettingsManager.deadzoneRadius
-            innerRadiusMax = SettingsManager.outerRingRadius
-            outerRadiusMax = SettingsManager.outerRingMaxRadius
+            innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
+            outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
         }
 
         if (data.state == TouchState.IDLE) {
@@ -153,7 +161,6 @@ class RadialRenderer(
             return
         }
 
-        // DELETE: zone-glow feedback only — never a radial menu.
         if (data.state == TouchState.DELETE) {
             drawDeleteFeedback(canvas, data)
             return
@@ -164,21 +171,17 @@ class RadialRenderer(
         val cy: Float
         when (data.state) {
             TouchState.PRIMARY -> {
-                accent = CYAN.toInt()
-                cx = data.anchorX; cy = data.anchorY
+                accent = CYAN.toInt(); cx = data.anchorX; cy = data.anchorY
             }
             TouchState.NUMBER -> {
-                accent = NUMBER_GREEN.toInt()
-                cx = data.anchorX; cy = data.anchorY
+                accent = NUMBER_GREEN.toInt(); cx = data.anchorX; cy = data.anchorY
             }
             TouchState.SYMBOL -> {
-                accent = SYMBOL_YELLOW.toInt()
-                cx = data.anchorX; cy = data.anchorY
+                accent = SYMBOL_YELLOW.toInt(); cx = data.anchorX; cy = data.anchorY
             }
             else -> {
                 accent = MAGENTA.toInt()
-                cx = data.secondaryAnchorX
-                cy = data.secondaryAnchorY
+                cx = data.secondaryAnchorX; cy = data.secondaryAnchorY
             }
         }
 
@@ -189,19 +192,13 @@ class RadialRenderer(
     private val effectiveDebug: Boolean
         get() = debugMode && (!SettingsManager.isInitialized || SettingsManager.debugMode)
 
-    /**
-     * Delete-mode feedback: the touch-zone ellipse washes red with a
-     * red rim, plus a finger halo and the live selection counter.
-     */
     private fun drawDeleteFeedback(canvas: Canvas, data: RadialRenderData) {
         if (zoneRX > 0f && zoneRY > 0f && zoneCX >= 0f) {
-            // Wash inside the idle touch zone only.
             canvas.drawOval(
                 zoneCX - zoneRX, zoneCY - zoneRY,
                 zoneCX + zoneRX, zoneCY + zoneRY,
                 deleteWashPaint
             )
-            // Red neon rim around the zone.
             outlinePaint.color = DELETE_RED.toInt()
             canvas.drawOval(
                 zoneCX - zoneRX, zoneCY - zoneRY,
@@ -210,9 +207,7 @@ class RadialRenderer(
             )
         }
 
-        // Halo around the finger.
-        glowPaint.color = 0x88F7768EL.toInt()
-        canvas.drawCircle(data.currentX, data.currentY, 22f * density, glowPaint)
+        drawCircleGlow(canvas, data.currentX, data.currentY, 22f * density, 0x88F7768E.toInt())          // ← replaced glowPaint circle
 
         val left = data.deleteLeftCount
         val right = data.deleteRightCount
@@ -222,10 +217,9 @@ class RadialRenderer(
         if (right > 0) sb.append(right).append(" →")
         val text = if (sb.isEmpty()) "DEL" else sb.toString()
 
-        floatingLabelPaint.color = FG_BRIGHT.toInt()
-        floatingLabelPaint.setShadowLayer(12f * density, 0f, 0f, DELETE_RED.toInt())
-        val y = (data.currentY - LABEL_OFFSET_PX).coerceAtLeast(floatingLabelPaint.textSize)
-        canvas.drawText(text, data.currentX, y, floatingLabelPaint)
+        val y = (data.labelY - LABEL_OFFSET_PX).coerceAtLeast(floatingLabelPaint.textSize)
+        drawFloatingTextWithBackdrop(canvas, text, data.labelX, y,
+            floatingLabelPaint, DELETE_RED.toInt())
     }
 
     private fun drawMenu(canvas: Canvas, cx: Float, cy: Float, accent: Int, data: RadialRenderData) {
@@ -244,22 +238,23 @@ class RadialRenderer(
             val lo = if (data.ring == Ring.INNER) deadPx else boundaryPx
             val hi = if (data.ring == Ring.INNER) boundaryPx else outerPx
             val path = annularSlicePath(cx, cy, lo, hi, data.segment)
-            glowPaint.color = accent
+            drawPathGlow(canvas, path, accent)          // ← replaced glowPaint block
             outlinePaint.color = accent
-            canvas.drawPath(path, glowPaint)
             canvas.drawPath(path, outlinePaint)
         }
 
         drawDeadZone(canvas, cx, cy, deadPx, data.state == TouchState.SECONDARY)
 
         if (data.state == TouchState.SECONDARY) {
-            drawSecondaryLabels(canvas, cx, cy, data.primaryChar)
+            drawSecondaryLabels(canvas, cx, cy, data.primaryChar, accent, data)
         } else {
-            drawPrimaryLabels(canvas, cx, cy, data.mode)
+            drawPrimaryLabels(canvas, cx, cy, data.mode, accent, data)
         }
     }
 
-    private fun drawPrimaryLabels(canvas: Canvas, cx: Float, cy: Float, mode: com.radialtype.engine.LayoutMode) {
+    private fun drawPrimaryLabels(canvas: Canvas, cx: Float, cy: Float,
+                                  mode: com.radialtype.engine.LayoutMode,
+                                  accent: Int, data: RadialRenderData) {
         val deadPx = deadZoneRadius * density
         val boundaryPx = innerRadiusMax * density
         val outerPx = outerRadiusMax * density
@@ -272,37 +267,55 @@ class RadialRenderer(
             val dx = cos(rad).toFloat()
             val dy = sin(rad).toFloat()
             drawCellLabel(canvas, cx + dx * midInner, cy + dy * midInner,
-                innerChars.getOrElse(seg) { "" })
+                innerChars.getOrElse(seg) { "" },
+                data.ring == Ring.INNER && data.segment == seg, accent)
             drawCellLabel(canvas, cx + dx * midOuter, cy + dy * midOuter,
-                outerChars.getOrElse(seg) { "" })
+                outerChars.getOrElse(seg) { "" },
+                data.ring == Ring.OUTER && data.segment == seg, accent)
         }
     }
 
-    private fun drawSecondaryLabels(canvas: Canvas, cx: Float, cy: Float, primaryChar: String) {
-      val deadPx = deadZoneRadius * density
-      val boundaryPx = innerRadiusMax * density
-      val outerPx = outerRadiusMax * density
-      val midInner = (deadPx + boundaryPx) / 2f
-      val midOuter = (boundaryPx + outerPx) / 2f
+    private fun drawSecondaryLabels(canvas: Canvas, cx: Float, cy: Float,
+                                    primaryChar: String, accent: Int, data: RadialRenderData) {
+        val deadPx = deadZoneRadius * density
+        val boundaryPx = innerRadiusMax * density
+        val outerPx = outerRadiusMax * density
+        val midInner = (deadPx + boundaryPx) / 2f
+        val midOuter = (boundaryPx + outerPx) / 2f
 
-      // Both rings are fully populated on the secondary menu: every
-      // segment resolves via the full ERGONOMIC_ORDER (inner ranks 0–7,
-      // outer ranks 8–15). Empty results simply draw nothing.
-      for (seg in 0 until 8) {
-          val rad = Math.toRadians((seg * 45f).toDouble())
-          val dx = cos(rad).toFloat()
-          val dy = sin(rad).toFloat()
-          drawCellLabel(canvas, cx + dx * midInner, cy + dy * midInner,
-              syllableProvider.getSyllable(primaryChar, Ring.INNER, seg))
-          drawCellLabel(canvas, cx + dx * midOuter, cy + dy * midOuter,
-              syllableProvider.getSyllable(primaryChar, Ring.OUTER, seg))
-      }
+        for (seg in 0 until 8) {
+            val rad = Math.toRadians((seg * 45f).toDouble())
+            val dx = cos(rad).toFloat()
+            val dy = sin(rad).toFloat()
+            drawCellLabel(canvas, cx + dx * midInner, cy + dy * midInner,
+                syllableProvider.getSyllable(primaryChar, Ring.INNER, seg),
+                data.ring == Ring.INNER && data.segment == seg, accent)
+            drawCellLabel(canvas, cx + dx * midOuter, cy + dy * midOuter,
+                syllableProvider.getSyllable(primaryChar, Ring.OUTER, seg),
+                data.ring == Ring.OUTER && data.segment == seg, accent)
+        }
     }
 
-    private fun drawCellLabel(canvas: Canvas, x: Float, y: Float, text: String) {
+    /**
+     * Cell label on a solid rounded backdrop; [active] brightens the
+     * label and outlines the backdrop with the current accent colour.
+     */
+    private fun drawCellLabel(canvas: Canvas, x: Float, y: Float, text: String,
+                              active: Boolean, accent: Int) {
         if (text.isEmpty()) return
-        menuLabelPaint.color = FG_MUTED.toInt()
-        canvas.drawText(text, x, y + menuLabelPaint.textSize / 3f, menuLabelPaint)
+        val halfW = menuLabelPaint.measureText(text) / 2f
+        val halfH = (menuLabelPaint.descent() - menuLabelPaint.ascent()) / 2f
+        val padX = 5f * density
+        val padY = 2.5f * density
+        val r = 6f * density
+        scratchRect.set(x - halfW - padX, y - halfH - padY,
+                        x + halfW + padX, y + halfH + padY)
+        canvas.drawRoundRect(scratchRect, r, r, cellBackdropPaint)
+        cellBackdropStroke.color = if (active) accent else CELL_BORDER.toInt()
+        canvas.drawRoundRect(scratchRect, r, r, cellBackdropStroke)
+        menuLabelPaint.color = if (active) FG_BRIGHT.toInt() else FG_MUTED.toInt()
+        val baseline = y - (menuLabelPaint.ascent() + menuLabelPaint.descent()) / 2f
+        canvas.drawText(text, x, baseline, menuLabelPaint)
     }
 
     private fun drawDeadZone(canvas: Canvas, cx: Float, cy: Float, rPx: Float, isSecondary: Boolean) {
@@ -310,8 +323,7 @@ class RadialRenderer(
         val rimColor = if (isSecondary) 0x66F7B96EL.toInt() else DEAD_RIM.toInt()
         deadRimPaint.color = rimColor
         if (isSecondary) {
-            glowPaint.color = 0x88F7B96EL.toInt()
-            canvas.drawCircle(cx, cy, rPx, glowPaint)
+            drawCircleGlow(canvas, cx, cy, rPx, 0x88F7B96E.toInt())   // ← replaced
         }
         canvas.drawCircle(cx, cy, rPx, deadRimPaint)
     }
@@ -325,11 +337,94 @@ class RadialRenderer(
     private fun drawFloatingLabel(canvas: Canvas, data: RadialRenderData, accent: Int) {
         val label = data.label
         if (label.isEmpty()) return
-        floatingLabelPaint.color = FG_BRIGHT.toInt()
-        floatingLabelPaint.setShadowLayer(12f * density, 0f, 0f, accent)
-        val y = (data.currentY - LABEL_OFFSET_PX).coerceAtLeast(floatingLabelPaint.textSize)
-        canvas.drawText(label, data.currentX, y, floatingLabelPaint)
+        val y = (data.labelY - LABEL_OFFSET_PX).coerceAtLeast(floatingLabelPaint.textSize)
+        drawFloatingTextWithBackdrop(canvas, label, data.labelX, y,
+            floatingLabelPaint, accent)
     }
+
+    /**
+     * Floating text on an opaque rounded panel with a neon glow and
+     * crisp accent border — always legible over any app content.
+     */
+    private fun drawFloatingTextWithBackdrop(
+        canvas: Canvas, text: String, x: Float, y: Float,
+        paint: TextPaint, accent: Int
+    ) {
+        val halfW = paint.measureText(text) / 2f
+        val halfH = (paint.descent() - paint.ascent()) / 2f
+        val padX = 14f * density
+        val padY = 10f * density
+        val r = 12f * density
+        scratchRect.set(x - halfW - padX, y - halfH - padY,
+                        x + halfW + padX, y + halfH + padY)
+        canvas.drawRoundRect(scratchRect, r, r, floatingPanelPaint)
+        drawRoundRectGlow(canvas, scratchRect, r, accent)
+        outlinePaint.color = accent
+        canvas.drawRoundRect(scratchRect, r, r, outlinePaint)
+        paint.color = FG_BRIGHT.toInt()
+        paint.clearShadowLayer()
+        val baseline = y - (paint.ascent() + paint.descent()) / 2f
+        canvas.drawText(text, x, baseline, paint)
+    }
+    
+    private val hudPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = spToPx(12f, context)
+        textAlign = Paint.Align.LEFT
+        typeface = Typeface.MONOSPACE
+    }
+
+    private val hudPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0xCC1A1B26.toInt()
+    }
+
+    fun drawPerfHud(canvas: Canvas, viewHeight: Float) {
+        if (!SettingsManager.isInitialized || !SettingsManager.perfHud) return
+        val hud = perfHud ?: return
+        val pad = 6f * density
+        val lines = String.format(
+            Locale.US,
+            "%.0f fps  frame %.1f/%.1f ms  draw %.2f ms  stale %.1f ms  %.0f ev/s",
+            hud.fps(), hud.avgIntervalMs(), hud.maxIntervalMs(),
+            hud.lastDrawMs, hud.lastStalenessMs, hud.inputRatePct
+        )
+        val w = hudPaint.measureText(lines) + pad * 2
+        val h = hudPaint.textSize + pad * 2
+        scratchRect.set(0f, viewHeight - h, w, viewHeight)
+        canvas.drawRoundRect(scratchRect, 8f * density, 8f * density, hudPanelPaint)
+        hudPaint.color = FG_MUTED.toInt()
+        canvas.drawText(lines, pad, viewHeight - pad, hudPaint)
+    }
+    
+    private fun glowAlpha(layer: Int): Int = 0x50 - (layer - 1) * 0x1C   // 80, 52, 24
+
+    private fun drawRoundRectGlow(canvas: Canvas, rect: RectF, r: Float, color: Int) {
+        for (layer in 1..3) {
+            glowStrokePaint.color = color
+            glowStrokePaint.alpha = glowAlpha(layer)
+            glowStrokePaint.strokeWidth = 6f * density * layer
+            canvas.drawRoundRect(rect, r, r, glowStrokePaint)
+        }
+    }
+
+    private fun drawCircleGlow(canvas: Canvas, cx: Float, cy: Float, radius: Float, color: Int) {
+        for (layer in 1..3) {
+            glowStrokePaint.color = color
+            glowStrokePaint.alpha = glowAlpha(layer)
+            glowStrokePaint.strokeWidth = 6f * density * layer
+            canvas.drawCircle(cx, cy, radius, glowStrokePaint)
+        }
+    }
+
+    private fun drawPathGlow(canvas: Canvas, path: Path, color: Int) {
+        for (layer in 1..3) {
+            glowStrokePaint.color = color
+            glowStrokePaint.alpha = glowAlpha(layer)
+            glowStrokePaint.strokeWidth = 6f * density * layer
+            canvas.drawPath(path, glowStrokePaint)
+        }
+    }
+    
 
     private fun annularSlicePath(cx: Float, cy: Float, rInner: Float, rOuter: Float, seg: Int): Path {
         val start = seg * 45f - 22.5f
@@ -350,7 +445,7 @@ class RadialRenderer(
     }
 
     private fun sectorColor(accent: Int, active: Boolean): Int =
-        if (active) PANEL_ACTIVE_ALPHA or (accent and 0x00FFFFFF)
+        if (active) 0x99000000.toInt() or (accent and 0x00FFFFFF)
         else PANEL_BASE.toInt()
 
     private fun spToPx(sp: Float, context: Context): Float =

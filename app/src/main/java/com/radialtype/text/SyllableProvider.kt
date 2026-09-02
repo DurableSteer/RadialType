@@ -28,42 +28,42 @@ import com.radialtype.engine.GeometryEngine.Ring
 class SyllableProvider(context: Context? = null) {
 
     companion object {
-    /**
-     * Maps frequency rank → segment index for a full 8-slot ring
-     * (rank 0 = most frequent → segment 6, due "north").
-     */
-    val ERGONOMIC_ORDER = intArrayOf(6, 0, 7, 5, 1, 4, 2, 3)
+      /**
+       * Maps frequency rank → segment index for a full 8-slot ring
+       * (rank 0 = most frequent → segment 6, due "north").
+       */
+      val ERGONOMIC_ORDER = intArrayOf(6, 0, 7, 5, 1, 4, 2, 3)
 
-    /**
-     * Total secondary-menu capacity: the full 8-segment ERGONOMIC_ORDER
-     * is applied per ring, so INNER holds ranks 0–7 (all 8 segments)
-     * and OUTER holds ranks 8–15 (same order, all 8 segments) —
-     * 16 populated cells total, matching the primary menu's geometry.
-     */
-    const val SYLLABLES_PER_CHAR = 16
+      /**
+       * Total secondary-menu capacity: the full 8-segment ERGONOMIC_ORDER
+       * is applied per ring, so INNER holds ranks 0–7 (all 8 segments)
+       * and OUTER holds ranks 8–15 (same order, all 8 segments) —
+       * 16 populated cells total, matching the primary menu's geometry.
+       */
+      const val SYLLABLES_PER_CHAR = 16
 
-    /** Segments per ring. */
-    const val SEGMENTS_PER_RING = 8
+      /** Segments per ring. */
+      const val SEGMENTS_PER_RING = 8
 
-    /** Embedded fallback, mirrors assets/syllables.json. */
-    val DEFAULT_JSON = """{
-        "T": ["TH", "TR", "TE", "TO", "TI", "TA", "TU", "TW"],
-        "N": ["ND", "NG", "NE", "NO", "NA", "NI", "NT", "NS"],
-        "S": ["ST", "SE", "SO", "SA", "SI", "SU", "SH", "SP"],
-        "R": ["RE", "RA", "RO", "RI", "RU", "RD", "RS", "RL"],
-        "H": ["HE", "HA", "HI", "HO", "HU", "HM", "HW", "HN"],
-        "L": ["LE", "LA", "LI", "LO", "LU", "LL", "LD", "LF"],
-        "D": ["DE", "DA", "DO", "DI", "DU", "DS", "DR", "DW"],
-        "C": ["CO", "CA", "CE", "CI", "CU", "CR", "CL", "CW"],
-        "A": ["AN", "AT", "AL", "AR", "AD", "AC", "AM", "AB"],
-        "E": ["ER", "EN", "ES", "EL", "ED", "EM", "EV", "EC"],
-        "I": ["IN", "IT", "IS", "IC", "IR", "IL", "IO", "ID"],
-        "O": ["ON", "OF", "OR", "OT", "OM", "OB", "OC", "OD"],
-        "U": ["UN", "UP", "US", "UT", "UM", "UR", "UB", "UD"],
-        "W": ["WA", "WE", "WI", "WH", "WO", "WR", "WS", "WY"],
-        "F": ["FO", "FR", "FI", "FA", "FE", "FL", "FU", "FY"],
-        "G": ["GR", "GA", "GE", "GO", "GI", "GU", "GL", "GS"]
-    }"""
+      /** Embedded fallback, lowercase mirrors of assets/syllables.json. */
+      val DEFAULT_JSON = """{
+          "t": ["th", "tr", "te", "to", "ti", "ta", "tu", "tw"],
+          "n": ["nd", "ng", "ne", "no", "na", "ni", "nt", "ns"],
+          "s": ["st", "se", "so", "sa", "si", "su", "sh", "sp"],
+          "r": ["re", "ra", "ro", "ri", "ru", "rd", "rs", "rl"],
+          "h": ["he", "ha", "hi", "ho", "hu", "hm", "hw", "hn"],
+          "l": ["le", "la", "li", "lo", "lu", "ll", "ld", "lf"],
+          "d": ["de", "da", "do", "di", "du", "ds", "dr", "dw"],
+          "c": ["co", "ca", "ce", "ci", "cu", "cr", "cl", "cw"],
+          "a": ["an", "at", "al", "ar", "ad", "ac", "am", "ab"],
+          "e": ["er", "en", "es", "el", "ed", "em", "ev", "ec"],
+          "i": ["in", "it", "is", "ic", "ir", "il", "io", "id"],
+          "o": ["on", "of", "or", "ot", "om", "ob", "oc", "od"],
+          "u": ["un", "up", "us", "ut", "um", "ur", "ub", "ud"],
+          "w": ["wa", "we", "wi", "wh", "wo", "wr", "ws", "wy"],
+          "f": ["fo", "fr", "fi", "fa", "fe", "fl", "fu", "fy"],
+          "g": ["gr", "ga", "ge", "go", "gi", "gu", "gl", "gs"]
+      }"""
   }
 
     private val syllableMap = LinkedHashMap<String, List<String>>()

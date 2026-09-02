@@ -1,16 +1,14 @@
 package com.radialtype.text
 
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import com.radialtype.settings.SettingsManager
 
 /**
- * Module 11 (+13) — Handles text commitment and deletion.
- *
- * Delete gesture: [previewDeleteRange] selects the doomed range live
- * during the swipe. The cursor base position is cached on the first
- * preview call so successive previews don't drift as the selection
- * moves the cursor. [deleteRange] removes the selection on release.
+ * Module 11 (+13) — Handles text commitment, deletion, editor actions
+ * and synthetic special-key events.
  */
 class InputDispatcher(
     private val connectionProvider: () -> InputConnection?
@@ -22,37 +20,72 @@ class InputDispatcher(
     /** Cursor position captured before any preview selection, or null. */
     private var previewBaseCursor: Int? = null
 
+    /** One-shot shift: the next committed letter gets an uppercase first letter. */
+    private var shiftArmed: Boolean = false
+
+    /** EditorInfo of the currently focused field; synced by the IME service. */
+    var currentEditorInfo: EditorInfo? = null
+
+    /** Arms the one-shot shift (SHIFT function key). */
+    fun shiftNext() {
+        shiftArmed = true
+    }
+
     /**
-     * Commits the given label with basic sentence capitalization
-     * (when the auto-capitalization setting is enabled).
+     * Commits the given label. The first letter is uppercased when the
+     * one-shot shift is armed, or when sentence auto-capitalization
+     * applies (and its setting is enabled). The shift is consumed by
+     * the first actual letter commit; SPACE/ENTER pass-throughs in the
+     * view bypass this method and leave the shift armed.
      */
     fun commit(label: String) {
         if (label.isEmpty()) return
         val ic = connectionProvider() ?: return
 
-        val capitalized = if (SettingsManager.autoCapitalization && shouldCapitalize(
+        val capitalize = shiftArmed || (
+            SettingsManager.autoCapitalization && shouldCapitalize(
                 ic.getTextBeforeCursor(10, 0)?.toString() ?: ""
             )
-        ) {
+            )
+        val capitalized = if (capitalize) {
             label.replaceFirstChar { it.uppercase() }
         } else {
             label
         }
 
         ic.commitText(capitalized, 1)
+        shiftArmed = false
         if (SettingsManager.autoSpaceEnabled) commitSpace()
     }
 
     /**
+     * Triggers the field's editor action (ENTER function key). For search /
+     * go / send fields this submits the query via performEditorAction;
+     * for plain text fields it falls back to synthetic KEYCODE_ENTER key
+     * events, which multiline editors treat as a newline and single-line
+     * editors translate into their default action.
+     */
+    fun commitEnter() {
+        val ic = connectionProvider() ?: return
+        val action = currentEditorInfo?.actionId ?: EditorInfo.IME_ACTION_UNSPECIFIED
+        if (action != EditorInfo.IME_ACTION_UNSPECIFIED &&
+            action != EditorInfo.IME_ACTION_NONE
+        ) {
+            ic.performEditorAction(action)
+            return
+        }
+        // Fallback: hardware-ENTER semantics.
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+    }
+
+    /**
      * Live preview for the DELETE gesture: selects up to [left] characters
-     * before the original cursor and [right] after it. The base cursor is
-     * captured on the first call and reused for the whole gesture, so the
-     * selection growing does not shift the reference point.
+     * before the original cursor and [right] after it.
      */
     fun previewDeleteRange(left: Int, right: Int) {
         val ic = connectionProvider() ?: return
 
-        // Zero selection: collapse back to the original cursor position.
         if (left <= 0 && right <= 0) {
             val base = previewBaseCursor
             if (base != null) ic.setSelection(base, base)
@@ -79,10 +112,7 @@ class InputDispatcher(
     }
 
     /**
-     * Performs the deletion selected by the DELETE gesture: commits an
-     * empty string over the previewed selection (most robust across
-     * editors), falling back to deleteSurroundingText when no selection
-     * data is available.
+     * Performs the deletion selected by the DELETE gesture.
      */
     fun deleteRange(left: Int, right: Int) {
         if (left <= 0 && right <= 0) return
@@ -106,6 +136,13 @@ class InputDispatcher(
         // Fallback for editors without extracted-text support.
         ic.deleteSurroundingText(left, right)
         previewBaseCursor = null
+    }
+
+    /** Sends a synthetic hardware key event (down + up). */
+    fun sendKey(keyCode: Int) {
+        val ic = connectionProvider() ?: return
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }
 
     /** Commits a single space character. */
