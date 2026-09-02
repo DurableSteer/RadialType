@@ -38,6 +38,18 @@ class RadialTypeIME : InputMethodService() {
         overlayController?.hide()
         super.onFinishInputView(finishingInput)
     }
+    
+    override fun onFinishInput() {
+        overlayController?.hide()
+        super.onFinishInput()
+    }
+
+    override fun onWindowHidden() {
+        // Covers cases where the window hides without the input view
+        // finishing (e.g. user pulls down the notification shade).
+        overlayController?.hide()
+        super.onWindowHidden()
+    }
 
     override fun onDestroy() {
         overlayController?.release()

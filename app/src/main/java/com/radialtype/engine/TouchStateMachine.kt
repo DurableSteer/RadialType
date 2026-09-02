@@ -122,6 +122,10 @@ class TouchStateMachine(
 
     private var lastRingChangeTime: Long = 0L
 
+    /** Pointer that owns the gesture, captured on ACTION_DOWN. */
+    var activePointerId: Int = MotionEvent.INVALID_POINTER_ID
+        private set
+
     var secondaryAnchorX: Float = 0f
         private set
 
@@ -168,13 +172,74 @@ class TouchStateMachine(
         dwellDurationMs = SettingsManager.dwellDurationMs.toLong()
         dwellTimer.dwellDurationMs = dwellDurationMs
     }
+    
+     /**
+     * Post-ring-change segment suppression window (ms). Read live from
+     * [SettingsManager] so it's tunable without recreating the FSM;
+     * falls back to the compiled default when settings are unavailable.
+     */
+    private fun suppressionWindowMs(): Long =
+        if (SettingsManager.isInitialized) {
+            SettingsManager.suppressionWindowMs.toLong()
+        } else {
+            SEGMENT_SUPPRESSION_MS
+        }
+    
+     /**
+     * Aborts any in-flight gesture and returns to IDLE. Used when the
+     * input session dies mid-gesture (input view finished, window hidden,
+     * overlay torn down): the pending dwell callback is cancelled so it
+     * can never re-open the overlay after teardown, and a DELETE gesture
+     * in progress releases its text-selection preview.
+     */
+    fun reset() {
+        if (state == TouchState.DELETE) {
+            deleteLeftCount = 0
+            deleteRightCount = 0
+            onDeleteCancelled?.invoke()   // also clears InputDispatcher preview state
+        }
+        dwellTimer.cancel()
+        activeMode = LayoutMode.LETTERS
+        currentRing = Ring.NONE
+        currentSegment = -1
+        previousRing = Ring.NONE
+        previousSegment = -1
+        secondaryAnchorX = 0f
+        secondaryAnchorY = 0f
+        lastUpTimestamp = 0L
+        lastUpInDeadzone = false
+        transitionTo(TouchState.IDLE)
+    }
 
     fun onTouchEvent(event: MotionEvent): Boolean {
         return when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN   -> handleDown(event)
-            MotionEvent.ACTION_MOVE   -> handleMove(event)
-            MotionEvent.ACTION_UP     -> handleUp(event)
-            MotionEvent.ACTION_CANCEL -> handleCancel()
+            MotionEvent.ACTION_DOWN -> {
+                activePointerId = event.getPointerId(event.actionIndex)
+                handleDown(event)
+            }
+            // Extra fingers never affect the gesture — but they must not
+            // fall through to the `else -> false` path, or the system may
+            // stop delivering MOVE events for the tracked pointer.
+            MotionEvent.ACTION_POINTER_DOWN -> true
+            MotionEvent.ACTION_MOVE   -> {
+                val idx = event.findPointerIndex(activePointerId)
+                if (idx >= 0) handleMove(event, idx) else true
+            }
+            // First finger lifting while a second is still down: end the
+            // gesture here; subsequent events until full release are ignored.
+            MotionEvent.ACTION_POINTER_UP ->
+                if (event.getPointerId(event.actionIndex) == activePointerId) {
+                    activePointerId = MotionEvent.INVALID_POINTER_ID
+                    handleUp(event)
+                } else true
+            MotionEvent.ACTION_UP -> {
+                activePointerId = MotionEvent.INVALID_POINTER_ID
+                handleUp(event)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                activePointerId = MotionEvent.INVALID_POINTER_ID
+                handleCancel()
+            }
             else -> false
         }
     }
@@ -192,18 +257,6 @@ class TouchStateMachine(
         secondaryAnchorY = currentY
         lastRingChangeTime = 0L
         transitionTo(TouchState.SECONDARY)
-    }
-
-    /**
-     * Enters DELETE mode while the finger is still down (DEL key path).
-     * The current position becomes the delete anchor; subsequent
-     * horizontal dragging selects characters.
-     */
-    fun enterDeleteFromKey() {
-        if (state != TouchState.PRIMARY) return
-        anchorX = currentX
-        anchorY = currentY
-        startDelete()
     }
 
     private fun startDelete() {
@@ -283,16 +336,16 @@ class TouchStateMachine(
         return true
     }
 
-    private fun handleMove(event: MotionEvent): Boolean {
-        currentX = event.x
-        currentY = event.y
+    private fun handleMove(event: MotionEvent, pointerIndex: Int): Boolean {
+        currentX = event.getX(pointerIndex)
+        currentY = event.getY(pointerIndex)
         currentEventTime = event.eventTime
 
         when (state) {
             TouchState.PRIMARY      -> handlePrimaryMove()
             TouchState.SECONDARY    -> handleSecondaryMove()
-            TouchState.DELETE       -> handleDeleteMove(event)
-            TouchState.AXIS_PENDING -> handleAxisPendingMove(event)
+            TouchState.DELETE       -> handleDeleteMove(event, pointerIndex)
+            TouchState.AXIS_PENDING -> handleAxisPendingMove(event, pointerIndex)
             TouchState.NUMBER,
             TouchState.SYMBOL       -> resolveGeometry(anchorX, anchorY)
             TouchState.IDLE         -> { /* spurious MOVE with no DOWN — ignore */ }
@@ -305,6 +358,7 @@ class TouchStateMachine(
     private fun handleUp(event: MotionEvent): Boolean {
         currentX = event.x
         currentY = event.y
+        currentEventTime = event.eventTime
 
         if (state == TouchState.DELETE) {
             val left = deleteLeftCount
@@ -323,6 +377,18 @@ class TouchStateMachine(
             lastUpInDeadzone = true
             transitionTo(TouchState.IDLE)
             return true
+        }
+
+        // Force-final resolution before commit: the suppression window
+        // must never mask the gesture-ending position, or a micro-flick
+        // that crossed the deadzone edge in its last frames commits
+        // nothing (currentSegment still −1 at UP).
+        when (state) {
+            TouchState.PRIMARY,
+            TouchState.NUMBER,
+            TouchState.SYMBOL    -> resolveGeometry(anchorX, anchorY, final = true)
+            TouchState.SECONDARY -> resolveGeometry(secondaryAnchorX, secondaryAnchorY, final = true)
+            else                 -> { /* IDLE: nothing to resolve */ }
         }
 
         lastUpTimestamp = SystemClock.uptimeMillis()
@@ -354,9 +420,9 @@ class TouchStateMachine(
      * locked, this same move is processed immediately so the gesture
      * loses no stroke.
      */
-    private fun handleAxisPendingMove(event: MotionEvent) {
-        val dxDp = GeometryEngine.pxToDp(event.x - anchorX, density)
-        val dyDp = GeometryEngine.pxToDp(event.y - anchorY, density)
+    private fun handleAxisPendingMove(event: MotionEvent, pointerIndex: Int) {
+        val dxDp = GeometryEngine.pxToDp(event.getX(pointerIndex) - anchorX, density)
+        val dyDp = GeometryEngine.pxToDp(event.getY(pointerIndex) - anchorY, density)
 
         val axDp = Math.abs(dxDp)
         val ayDp = Math.abs(dyDp)
@@ -365,7 +431,7 @@ class TouchStateMachine(
         if (axDp >= ayDp) {
             Log.d(TAG, "Gateway lock: horizontal → DELETE")
             startDelete()
-            handleDeleteMove(event)
+            handleDeleteMove(event, pointerIndex)   // ← was handleDeleteMove(event)
         } else if (dyDp < 0f) {
             Log.d(TAG, "Gateway lock: upward → NUMBER mode")
             enterModeLocked(LayoutMode.NUMBERS)
@@ -379,8 +445,8 @@ class TouchStateMachine(
 
     // ── DELETE-mode drag handling ────────────────────────────────
 
-    private fun handleDeleteMove(event: MotionEvent) {
-        val dxDp = GeometryEngine.pxToDp(event.x - anchorX, density)
+    private fun handleDeleteMove(event: MotionEvent, pointerIndex: Int) {
+        val dxDp = GeometryEngine.pxToDp(event.getX(pointerIndex) - anchorX, density)
         val axDp = Math.abs(dxDp)
 
         val selectionActive = deleteLeftCount > 0 || deleteRightCount > 0
@@ -424,15 +490,20 @@ class TouchStateMachine(
         }
     }
 
-    // ── Normal geometry resolution (PRIMARY / SECONDARY / modes) ─
-
     /**
      * Common geometry resolution for PRIMARY, SECONDARY, NUMBER and
      * SYMBOL. In SECONDARY the anchor is the dwell point; otherwise the
      * gesture anchor. Deadzone (ring NONE) suppresses segment updates;
      * overshoot beyond the outer edge clamps to OUTER.
+     *
+     * @param final true when resolving the gesture-ending position on
+     *              ACTION_UP. The post-ring-change suppression window is
+     *              skipped: the last classification before the lift must
+     *              always yield a committed segment, even when the ring
+     *              change and the lift happened within the same
+     *              [SEGMENT_SUPPRESSION_MS] window (micro-flick case).
      */
-    private fun resolveGeometry(anchorX: Float, anchorY: Float) {
+    private fun resolveGeometry(anchorX: Float, anchorY: Float, final: Boolean = false) {
         val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
         val distDp = GeometryEngine.pxToDp(distPx, density)
         val angleDeg = geometryEngine.angle(anchorX, anchorY, currentX, currentY)
@@ -452,16 +523,20 @@ class TouchStateMachine(
             dwellTimer.reset()
         }
 
-        val newSegment = geometryEngine.computeSegment(angleDeg)
+        val newSegment = geometryEngine.computeSegment(angleDeg, currentSegment)
 
+        // Suppression window masks boundary jitter mid-gesture — but a
+        // final (UP) resolution must never be masked, or the gesture
+        // ends with no segment to commit. Hysteresis (2° angular,
+        // tunable) carries jitter defense instead.
         val timeSinceRingChange = currentEventTime - lastRingChangeTime
-        if (timeSinceRingChange >= SEGMENT_SUPPRESSION_MS) {
-            if (newRing != Ring.NONE && newSegment != currentSegment) {
-                previousSegment = currentSegment
-                currentSegment = newSegment
-                onSegmentChanged?.invoke(newSegment)
-                dwellTimer.reset()
-            }
+        val suppressed = !final && timeSinceRingChange < suppressionWindowMs()
+
+        if (!suppressed && newRing != Ring.NONE && newSegment != currentSegment) {
+            previousSegment = currentSegment
+            currentSegment = newSegment
+            onSegmentChanged?.invoke(newSegment)
+            dwellTimer.reset()
         }
     }
 

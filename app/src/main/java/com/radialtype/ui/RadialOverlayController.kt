@@ -9,7 +9,9 @@ import android.view.WindowManager
 import com.radialtype.text.CharacterMap
 import com.radialtype.text.InputDispatcher
 import com.radialtype.text.SyllableProvider
+import com.radialtype.engine.TouchStateMachine
 import com.radialtype.settings.SettingsManager
+
 
 /**
  * Owns the two-window setup: a small touchable pad and a lazy fullscreen
@@ -61,10 +63,11 @@ class RadialOverlayController(
     }
 
     private fun onFrame(data: RadialRenderData) {
-        val active = data.state != com.radialtype.engine.TouchStateMachine.TouchState.IDLE
+        val active = data.state != TouchStateMachine.TouchState.IDLE &&
+            data.state != TouchStateMachine.TouchState.AXIS_PENDING
         if (active && !overlayAdded) addOverlayWindow()
         overlayView.setData(data)
-        if (data.state == com.radialtype.engine.TouchStateMachine.TouchState.IDLE && overlayAdded) {
+        if (!active && overlayAdded) {
             removeOverlayWindow()
         }
     }
@@ -132,6 +135,7 @@ class RadialOverlayController(
     }
 
     fun hide() {
+        padView.resetGesture()
         removeOverlayWindow()
         if (padAdded) {
             runCatching { wm.removeView(padView) }

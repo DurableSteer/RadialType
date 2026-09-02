@@ -50,7 +50,6 @@ class RadialRenderer(
 
     companion object {
         const val LABEL_OFFSET_PX = 160f
-
         private const val FLOATING_TEXT_SP = 36f
         private const val MENU_LABEL_SP = 20f
 
@@ -77,6 +76,12 @@ class RadialRenderer(
     var deadZoneRadius: Float = GeometryEngine.DEAD_ZONE_RADIUS
     var innerRadiusMax: Float = GeometryEngine.INNER_RADIUS_MAX
     var outerRadiusMax: Float = GeometryEngine.OUTER_RADIUS_MAX
+    
+    var floatingLabelOffsetPx: Float = LABEL_OFFSET_PX
+        private set
+        
+    private var cachedMenuSp = 0f
+    private var cachedFloatSp = 0f
 
     private var zoneCX = -1f
     private var zoneCY = -1f
@@ -84,6 +89,7 @@ class RadialRenderer(
     private var zoneRY = 0f
 
     private val density = context.resources.displayMetrics.density
+    private val appContext = context.applicationContext
 
     private val sectorFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -150,6 +156,7 @@ class RadialRenderer(
     }
 
     fun render(canvas: Canvas, data: RadialRenderData) {
+        refreshFeelFromSettings()
         if (SettingsManager.isInitialized) {
             deadZoneRadius = SettingsManager.deadzoneRadius
             innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
@@ -157,6 +164,13 @@ class RadialRenderer(
         }
 
         if (data.state == TouchState.IDLE) {
+            if (effectiveDebug && showIdleZoneHint) drawIdleZone(canvas)
+            return
+        }
+
+        // Gateway gesture, axis not yet locked: draw nothing. The menu
+        // only appears once the flick resolves to DELETE / NUMBER / SYMBOL.
+        if (data.state == TouchState.AXIS_PENDING) {
             if (effectiveDebug && showIdleZoneHint) drawIdleZone(canvas)
             return
         }
@@ -217,9 +231,25 @@ class RadialRenderer(
         if (right > 0) sb.append(right).append(" →")
         val text = if (sb.isEmpty()) "DEL" else sb.toString()
 
-        val y = (data.labelY - LABEL_OFFSET_PX).coerceAtLeast(floatingLabelPaint.textSize)
+        val y = (data.labelY - floatingLabelOffsetPx).coerceAtLeast(floatingLabelPaint.textSize)
         drawFloatingTextWithBackdrop(canvas, text, data.labelX, y,
             floatingLabelPaint, DELETE_RED.toInt())
+    }
+    
+    /** Pulls label/typography feel settings. Cheap string-free compare. */
+    private fun refreshFeelFromSettings() {
+        if (!SettingsManager.isInitialized) return
+        floatingLabelOffsetPx = SettingsManager.floatingLabelOffsetPx.toFloat()
+        val menuSp = SettingsManager.menuLabelSizeSp.toFloat()
+        if (menuSp != cachedMenuSp) {
+            cachedMenuSp = menuSp
+            menuLabelPaint.textSize = spToPx(menuSp, appContext)
+        }
+        val floatSp = SettingsManager.floatingFontSizeSp.toFloat()
+        if (floatSp != cachedFloatSp) {
+            cachedFloatSp = floatSp
+            floatingLabelPaint.textSize = spToPx(floatSp, appContext)
+        }
     }
 
     private fun drawMenu(canvas: Canvas, cx: Float, cy: Float, accent: Int, data: RadialRenderData) {
@@ -337,7 +367,7 @@ class RadialRenderer(
     private fun drawFloatingLabel(canvas: Canvas, data: RadialRenderData, accent: Int) {
         val label = data.label
         if (label.isEmpty()) return
-        val y = (data.labelY - LABEL_OFFSET_PX).coerceAtLeast(floatingLabelPaint.textSize)
+        val y = (data.labelY - floatingLabelOffsetPx).coerceAtLeast(floatingLabelPaint.textSize)
         drawFloatingTextWithBackdrop(canvas, label, data.labelX, y,
             floatingLabelPaint, accent)
     }

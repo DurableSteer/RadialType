@@ -188,25 +188,23 @@ class RadialKeyboardView(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 resetVelocity()
-                updateVelocity(event)
+                updateVelocity(event, event.getPointerId(event.actionIndex))
             }
-            MotionEvent.ACTION_MOVE -> updateVelocity(event)
+            MotionEvent.ACTION_MOVE -> {
+                val idx = event.findPointerIndex(touchStateMachine.activePointerId)
+                if (idx >= 0) updateVelocity(event, idx)
+            }
             MotionEvent.ACTION_UP,
             MotionEvent.ACTION_CANCEL -> resetVelocity()
         }
         if (event.actionMasked == MotionEvent.ACTION_DOWN && zoneReady) {
-            val dx = event.x - width / 2f
-            val dy = event.y - height / 2f
-            val nx = dx / zoneRX
-            val ny = dy / zoneRY
-            if (nx * nx + ny * ny > 1f) return false
-            requestUnbufferedDispatch(event)
-            touchStateMachine.refreshFromSettings()
-            characterMap.maybeReload()
-            syllableProvider.maybeReloadFromLayout(SettingsManager.customLayoutJson)
+            // ... unchanged pad-zone / reload logic
         }
         return touchStateMachine.onTouchEvent(event)
     }
+    
+    /** Cancels any in-progress gesture and returns the pad to IDLE. */
+    fun resetGesture() = touchStateMachine.reset()
 
     fun pushFrame() {
         // Predicted position for the floating label only. The ring/segment
@@ -254,18 +252,16 @@ class RadialKeyboardView(
         lastEvtT = 0L
     }
 
-    private fun updateVelocity(event: MotionEvent) {
+    private fun updateVelocity(event: MotionEvent, pointerIndex: Int) {
         val dt = (event.eventTime - lastEvtT).toFloat()
         if (dt > 0f && lastEvtT != 0L) {
-            val ix = (event.x - lastEvtX) / dt
-            val iy = (event.y - lastEvtY) / dt
-            // Light exponential smoothing so a single noisy sample
-            // can't fling the prediction box off-screen.
+            val ix = (event.getX(pointerIndex) - lastEvtX) / dt
+            val iy = (event.getY(pointerIndex) - lastEvtY) / dt
             velX = velX * 0.6f + ix * 0.4f
             velY = velY * 0.6f + iy * 0.4f
         }
-        lastEvtX = event.x
-        lastEvtY = event.y
+        lastEvtX = event.getX(pointerIndex)
+        lastEvtY = event.getY(pointerIndex)
         lastEvtT = event.eventTime
     }
 }

@@ -31,6 +31,12 @@ object SettingsManager {
     const val KEY_ENABLE_KEYBOARD_BUTTON = "enable_keyboard_button"
     const val KEY_OVERLAY_PERMISSION = "overlay_permission"
     const val KEY_PERF_HUD = "perf_hud"
+    const val KEY_RING_HYSTERESIS = "ring_hysteresis"
+    const val KEY_SEGMENT_HYSTERESIS = "segment_hysteresis"
+    const val KEY_FLOATING_LABEL_OFFSET = "floating_label_offset"
+    const val KEY_FLOATING_FONT = "floating_font_size"
+    const val KEY_MENU_FONT = "menu_font_size"
+    const val KEY_SUPPRESSION_WINDOW = "suppression_window"
 
     //   language packs
     const val KEY_LANGUAGE_PRIMARY = "language_primary"
@@ -54,7 +60,7 @@ object SettingsManager {
     // Stored in tenths: slider 1..100 → 0.1..10.0 chars/mm.
     const val DELETE_RATE_MIN = 1
     const val DELETE_RATE_MAX = 100
-    const val DELETE_RATE_DEFAULT = 30
+    const val DELETE_RATE_DEFAULT = 3
 
     const val INNER_RING_MIN = 40f
     const val INNER_RING_MAX = 140f
@@ -67,6 +73,32 @@ object SettingsManager {
     const val DEADZONE_MIN = 10f
     const val DEADZONE_MAX = 60f
     const val DEADZONE_DEFAULT = 15f
+    
+    // ── Hysteresis bounds (stored in tenths) ─────────────────────
+    const val RING_HYSTERESIS_MIN = 0      // 0.0 dp
+    const val RING_HYSTERESIS_MAX = 160    // 16.0 dp
+    const val RING_HYSTERESIS_DEFAULT = 80 // 8.0 dp (legacy constant)
+
+    const val SEGMENT_HYSTERESIS_MIN = 0   // 0.0°
+    const val SEGMENT_HYSTERESIS_MAX = 50  // 5.0°
+    const val SEGMENT_HYSTERESIS_DEFAULT = 20 // 2.0° per Module 13 spec
+
+    const val FLOATING_OFFSET_MIN = 60
+    const val FLOATING_OFFSET_MAX = 320
+    const val FLOATING_OFFSET_DEFAULT = 160
+
+    const val FLOATING_FONT_MIN = 12
+    const val FLOATING_FONT_MAX = 64
+    const val FLOATING_FONT_DEFAULT = 36
+
+    const val MENU_FONT_MIN = 10
+    const val MENU_FONT_MAX = 40
+    const val MENU_FONT_DEFAULT = 20
+    
+    // Post-ring-change segment suppression window (ms).
+    const val SUPPRESSION_MIN = 0
+    const val SUPPRESSION_MAX = 200
+    const val SUPPRESSION_DEFAULT = 50
 
     // (0 = 100% secondary language, 100 = 100% primary language).
     const val LANGUAGE_MIX_MIN = 0
@@ -140,7 +172,58 @@ object SettingsManager {
         set(value) = put {
             it.putInt(KEY_DOUBLE_TAP_DEADZONE, clamp(value, DOUBLE_TAP_MIN, DOUBLE_TAP_MAX))
         }
+    
+    var floatingLabelOffsetPx: Int
+        get() = clamp(prefs?.getInt(KEY_FLOATING_LABEL_OFFSET, FLOATING_OFFSET_DEFAULT)
+            ?: FLOATING_OFFSET_DEFAULT, FLOATING_OFFSET_MIN, FLOATING_OFFSET_MAX)
+        set(value) = put {
+            it.putInt(KEY_FLOATING_LABEL_OFFSET, clamp(value, FLOATING_OFFSET_MIN, FLOATING_OFFSET_MAX))
+        }
 
+    /** Floating label font size (sp), 12–64. */
+    var floatingFontSizeSp: Int
+        get() = clamp(prefs?.getInt(KEY_FLOATING_FONT, FLOATING_FONT_DEFAULT)
+            ?: FLOATING_FONT_DEFAULT, FLOATING_FONT_MIN, FLOATING_FONT_MAX)
+        set(value) = put {
+            it.putInt(KEY_FLOATING_FONT, clamp(value, FLOATING_FONT_MIN, FLOATING_FONT_MAX))
+        }
+
+    /** Menu cell label font size (sp), 10–40. */
+    var menuLabelSizeSp: Int
+        get() = clamp(prefs?.getInt(KEY_MENU_FONT, MENU_FONT_DEFAULT)
+            ?: MENU_FONT_DEFAULT, MENU_FONT_MIN, MENU_FONT_MAX)
+        set(value) = put {
+            it.putInt(KEY_MENU_FONT, clamp(value, MENU_FONT_MIN, MENU_FONT_MAX))
+        }
+
+    /** Ring hysteresis band (dp), 0.0–16.0. */
+    var ringHysteresisDp: Float
+        get() = clamp(prefs?.getInt(KEY_RING_HYSTERESIS, RING_HYSTERESIS_DEFAULT)
+            ?: RING_HYSTERESIS_DEFAULT,
+            RING_HYSTERESIS_MIN, RING_HYSTERESIS_MAX) / 10f
+        set(value) = put {
+            it.putInt(KEY_RING_HYSTERESIS, (value * 10f).toInt()
+                .coerceIn(RING_HYSTERESIS_MIN, RING_HYSTERESIS_MAX))
+        }
+
+    /** Angular deadzone around segment boundaries (degrees), 0.0–5.0. */
+    var segmentHysteresisDeg: Float
+        get() = clamp(prefs?.getInt(KEY_SEGMENT_HYSTERESIS, SEGMENT_HYSTERESIS_DEFAULT)
+            ?: SEGMENT_HYSTERESIS_DEFAULT,
+            SEGMENT_HYSTERESIS_MIN, SEGMENT_HYSTERESIS_MAX) / 10f
+        set(value) = put {
+            it.putInt(KEY_SEGMENT_HYSTERESIS, (value * 10f).toInt()
+                .coerceIn(SEGMENT_HYSTERESIS_MIN, SEGMENT_HYSTERESIS_MAX))
+        }
+    
+    /** Segment-suppression window after a ring change (ms), 0–200. */
+    var suppressionWindowMs: Int
+        get() = clamp(prefs?.getInt(KEY_SUPPRESSION_WINDOW, SUPPRESSION_DEFAULT)
+            ?: SUPPRESSION_DEFAULT, SUPPRESSION_MIN, SUPPRESSION_MAX)
+        set(value) = put {
+            it.putInt(KEY_SUPPRESSION_WINDOW, clamp(value, SUPPRESSION_MIN, SUPPRESSION_MAX))
+        }
+        
     /** Characters deleted per millimetre of horizontal swipe in DELETE mode. */
     var deleteCharsPerMm: Float
         get() = clamp(prefs?.getInt(KEY_DELETE_RATE, DELETE_RATE_DEFAULT) ?: DELETE_RATE_DEFAULT,

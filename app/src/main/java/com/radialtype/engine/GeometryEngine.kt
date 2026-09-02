@@ -42,6 +42,12 @@ class GeometryEngine(
 
     /** Number of angular segments per ring (45° each). */
     val segmentCount: Int = SEGMENT_COUNT
+    
+    /** Ring hysteresis band (dp) */
+    var hysteresisRadiusDp: Float = HYSTERESIS
+
+    /** Angular deadzone around segment boundaries (degrees) */
+    var segmentHysteresisDeg: Float = SEGMENT_HYSTERESIS_DEG
 
     /**
      * Pulls current ring radii from [SettingsManager] so user-adjusted
@@ -63,6 +69,8 @@ class GeometryEngine(
         deadZoneRadius = SettingsManager.deadzoneRadius
         innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
         outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
+        hysteresisRadiusDp = SettingsManager.ringHysteresisDp
+        segmentHysteresisDeg = SettingsManager.segmentHysteresisDeg
     }
 
     /**
@@ -92,8 +100,8 @@ class GeometryEngine(
         if (distanceFromCenter > outerRadiusMax) return Ring.OUTER
 
         // ── Deadzone boundary (0 .. deadZoneRadius) ───────────────
-        val deadLower = deadZoneRadius - HYSTERESIS
-        val deadUpper = deadZoneRadius + HYSTERESIS
+        val deadLower = deadZoneRadius - hysteresisRadiusDp
+        val deadUpper = deadZoneRadius + hysteresisRadiusDp
 
         if (distanceFromCenter < deadLower) return Ring.NONE
 
@@ -107,8 +115,8 @@ class GeometryEngine(
 
         // ── Inner/outer boundary (deadzone .. outerRadiusMax) ─────
         val boundary = innerRadiusMax
-        val lowerHysteresis = boundary - HYSTERESIS
-        val upperHysteresis = boundary + HYSTERESIS
+        val lowerHysteresis = boundary - hysteresisRadiusDp
+        val upperHysteresis = boundary + hysteresisRadiusDp
 
         return when {
             distanceFromCenter < lowerHysteresis -> Ring.INNER
@@ -125,20 +133,47 @@ class GeometryEngine(
     }
 
     /**
-     * Maps an angle to a segment index (0 .. SEGMENT_COUNT−1).
+     * Maps an angle to a segment index with hysteresis.
      *
-     * Segment 0 is centered at 0° (east / "3 o'clock"), so it spans
-     * −22.5° to +22.5°. Segments proceed clockwise.
+     * Pure instantaneous mapping (raw) first, then: if the raw result
+     * differs from [previousSegment] AND the angle sits within
+     * [SEGMENT_HYSTERESIS_DEG] of a boundary (±22.5°, ±67.5°, …) AND the
+     * two segments are adjacent, retain the previous segment. The
+     * adjacency guard keeps legitimate fast strokes through several
+     * segments from snapping back; only boundary jitter is absorbed.
      *
-     * @param angleDegrees Angle in degrees, normalized to 0–360°.
-     * @return Segment index 0–7.
+     * @param previousSegment Segment from the previous frame, or −1 if none.
      */
+    fun computeSegment(angleDegrees: Float, previousSegment: Int): Int {
+        val raw = computeSegment(angleDegrees)
+        if (previousSegment < 0 || previousSegment >= SEGMENT_COUNT) return raw
+        if (raw == previousSegment) return raw
+
+        // Adjacent only (with wraparound): jitter at a shared boundary.
+        val adjacent = Math.abs(raw - previousSegment) == 1 ||
+            Math.abs(raw - previousSegment) == SEGMENT_COUNT - 1
+        if (!adjacent) return raw
+
+        val distToBoundary = boundaryDistance(angleDegrees)
+        return if (distToBoundary <= segmentHysteresisDeg) previousSegment else raw
+    }
     fun computeSegment(angleDegrees: Float): Int {
         val segmentWidth = 360f / SEGMENT_COUNT
         val halfSegment = segmentWidth / 2f
         val index = ((angleDegrees + halfSegment) / segmentWidth).toInt()
         return index % SEGMENT_COUNT
     }
+    
+    /**
+     * Angular distance (degrees) from [angleDegrees] to the nearest
+     * segment boundary. Boundaries sit at 22.5° + k·45°, so the
+     * distance is |(angle mod 45) − 22.5|.
+     */
+    private fun boundaryDistance(angleDegrees: Float): Float {
+        val m = ((angleDegrees % 45f) + 45f) % 45f
+        return Math.abs(m - 22.5f)
+    }
+
 
     /**
      * Standard Euclidean distance between two points.
@@ -190,6 +225,9 @@ class GeometryEngine(
 
         const val SEGMENT_COUNT = 8
 
+        /** Default angular deadzone around segment boundaries (deg). */
+        const val SEGMENT_HYSTERESIS_DEG = 2f
+        /** Default ring hysteresis band (dp). */
         const val HYSTERESIS = 8f
 
         /**

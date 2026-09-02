@@ -75,6 +75,62 @@
             android:summary="Capitalize the first letter of sentences"
             android:defaultValue="true" />
     </PreferenceCategory>
+    
+    <PreferenceCategory android:title="Advanced — Feel tuning">
+        <SeekBarPreference
+            android:key="ring_hysteresis"
+            android:title="Ring hysteresis (dp)"
+            android:summary="Retained-ring deadband near ring boundaries (8.0 dp default)"
+            android:defaultValue="80"
+            app:min="0"
+            android:max="160"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="segment_hysteresis"
+            android:title="Segment hysteresis (degrees)"
+            android:summary="Angular deadzone around segment boundaries (2.0° default)"
+            android:defaultValue="20"
+            app:min="0"
+            android:max="50"
+            app:showSeekBarValue="true" />
+        
+        <SeekBarPreference
+            android:key="suppression_window"
+            android:title="Suppression window (ms)"
+            android:summary="Segment updates paused after a ring transition (50 ms default)"
+            android:defaultValue="50"
+            app:min="0"
+            android:max="200"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="floating_label_offset"
+            android:title="Label offset (px)"
+            android:summary="Floating label height above the finger"
+            android:defaultValue="160"
+            app:min="60"
+            android:max="320"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="floating_font_size"
+            android:title="Label font size (sp)"
+            android:summary="Floating commit-label text size"
+            android:defaultValue="36"
+            app:min="12"
+            android:max="64"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="menu_font_size"
+            android:title="Menu cell font size (sp)"
+            android:summary="Ring cell label text size"
+            android:defaultValue="20"
+            app:min="10"
+            android:max="64"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
 
     <PreferenceCategory android:title="Delete gesture">
         <SeekBarPreference
@@ -90,7 +146,7 @@
             android:key="delete_chars_per_mm"
             android:title="Characters per mm (delete)"
             android:summary="How many characters are selected per millimetre of horizontal swipe (0.1 – 10.0)"
-            android:defaultValue="30"
+            android:defaultValue="3"
             app:min="1"
             android:max="100"
             app:showSeekBarValue="true" />
@@ -101,7 +157,7 @@
             android:key="deadzone_radius"
             android:title="Deadzone size (dp)"
             android:summary="Radius of the centre zone where no character is selected"
-            android:defaultValue="10"
+            android:defaultValue="15"
             app:min="5"
             android:max="50"
             app:showSeekBarValue="true" />

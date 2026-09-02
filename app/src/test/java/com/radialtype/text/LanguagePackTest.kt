@@ -134,15 +134,24 @@ class LanguagePackTest {
         val scores = ('A'..'N').withIndex().associate { (i, c) -> "$c" to (20.0 - i).toDouble() }
         val layout = LayoutArranger.generate(
             blendedFromScores(scores), "test", 1.0,
-            reservedOuterSegments = mapOf(
-                2 to CharacterMap.TOKEN_SHIFT,
-            )
+            reservedOuterSegments = mapOf(2 to CharacterMap.TOKEN_SHIFT)
         )
         assertEquals(CharacterMap.TOKEN_SHIFT, layout.outer[2])
-
+        // 14 letters vs a 15-slot budget: everything still places, and
+        // the reserved slot holds the token, not a letter.
         val lettersPlaced = layout.inner.count { it.isNotEmpty() } +
-            layout.outer.count { it.isNotEmpty() } - 2
+            layout.outer.count { it.isNotEmpty() } - 1
         assertEquals(14, lettersPlaced)
+        assertTrue(layout.residualLetters.isEmpty())
+
+        // 16 letters vs the same 15-slot budget: exactly one letter
+        // must overflow to the residual pool because of the reservation.
+        val tightScores = ('A'..'P').withIndex().associate { (i, c) -> "$c" to (20.0 - i).toDouble() }
+        val tight = LayoutArranger.generate(
+            blendedFromScores(tightScores), "test", 1.0,
+            reservedOuterSegments = mapOf(2 to CharacterMap.TOKEN_SHIFT)
+        )
+        assertEquals(listOf("P"), tight.residualLetters)
     }
 
     @Test
