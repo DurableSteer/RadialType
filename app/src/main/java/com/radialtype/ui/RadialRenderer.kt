@@ -53,14 +53,23 @@ class RadialRenderer(
         private const val FLOATING_TEXT_SP = 36f
         private const val MENU_LABEL_SP = 20f
 
-        // ── Tokyo Night palette (high contrast) ──────────────────
-        private const val CYAN = 0xFF7AA2F7L
-        private const val MAGENTA = 0xFFBB9AF7L
-        private const val FG_MUTED = 0xFFC0CAF5L          // brighter cell text
-        private const val FG_BRIGHT = 0xFFF5EBFAL
-        private const val PANEL_BASE = 0xFF1A1B26L        // opaque sector fill
-        private const val CELL_BORDER = 0x66565F89L       // backdrop outline
-        private const val DEAD_FILL = 0xF2161616L
+        // ── Tokyo Night neon palette ─────────────────────────────
+        // Sectors are nearly transparent; structure comes from thin
+        // neon ring lines, emphasis comes from the active accent.
+        private const val CYAN = 0xFF7DCFFFL             // primary accent
+        private const val MAGENTA = 0xFFBB9AF7L          // secondary accent
+        private const val FG_MUTED = 0xFF9AA5CEL
+        private const val FG_BRIGHT = 0xFFEAF0FAL
+
+        private const val SECTOR_IDLE = 0x0F161B26L      // whisper-faint glass
+        private const val SECTOR_ACTIVE_BASE = 0x59000000L
+        private const val LINE_STRONG = 0x597AA2F7L      // inner boundary
+        private const val LINE_FAINT = 0x2E565F89L       // outer edge
+        private const val CELL_BACKDROP = 0xB31A1B26L    // translucent label chip
+        private const val CELL_BORDER = 0x33565F89L
+
+        private const val PANEL_BASE = 0xE61A1B26L       // floating label panel
+        private const val DEAD_FILL = 0xD9161616L
         private const val DEAD_RIM = 0x66F7768EL
         private const val ZONE_STROKE = 0x597AA2F7L
 
@@ -97,7 +106,12 @@ class RadialRenderer(
 
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 2f * density
+        strokeWidth = 1.5f * density
+    }
+    
+    private val ringLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1f * density
     }
 
     private val glowStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -122,7 +136,7 @@ class RadialRenderer(
 
     private val cellBackdropPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = PANEL_BASE.toInt()
+        color = CELL_BACKDROP.toInt()
     }
 
     private val cellBackdropStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -133,7 +147,7 @@ class RadialRenderer(
 
     private val floatingPanelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = PANEL_BASE.toInt()
+        color = 0xE61A1B26.toInt()   // translucent: neon border floats over content
     }
 
     private val menuLabelPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -257,6 +271,8 @@ class RadialRenderer(
         val boundaryPx = innerRadiusMax * density
         val outerPx = outerRadiusMax * density
 
+        // Glass sectors: idle cells are near-invisible; the active cell
+        // is the only one that fills with color.
         for (seg in 0 until 8) {
             drawAnnularSlice(canvas, cx, cy, deadPx, boundaryPx, seg,
                 sectorColor(accent, data.ring == Ring.INNER && data.segment == seg))
@@ -264,16 +280,32 @@ class RadialRenderer(
                 sectorColor(accent, data.ring == Ring.OUTER && data.segment == seg))
         }
 
+        // Structure: one hairline circle per ring boundary instead of
+        // per-cell borders — reads as a neon instrument, not a grid.
+        ringLinePaint.color = LINE_FAINT.toInt()
+        canvas.drawCircle(cx, cy, outerPx, ringLinePaint)
+        ringLinePaint.color = LINE_STRONG.toInt()
+        canvas.drawCircle(cx, cy, boundaryPx, ringLinePaint)
+
         if (data.ring != Ring.NONE && data.segment in 0 until 8) {
             val lo = if (data.ring == Ring.INNER) deadPx else boundaryPx
             val hi = if (data.ring == Ring.INNER) boundaryPx else outerPx
             val path = annularSlicePath(cx, cy, lo, hi, data.segment)
-            drawPathGlow(canvas, path, accent)          // ← replaced glowPaint block
-            outlinePaint.color = accent
-            canvas.drawPath(path, outlinePaint)
+
+            // Soft halo, then a crisp single-width accent line. Half the
+            // old stroke width keeps the glow tight to the sector edge.
+            for (layer in 1..3) {
+                glowStrokePaint.color = accent
+                glowStrokePaint.alpha = glowAlpha(layer)
+                glowStrokePaint.strokeWidth = 3f * density * layer
+                canvas.drawPath(path, glowStrokePaint)
+            }
+            ringLinePaint.color = accent
+            ringLinePaint.strokeWidth = 1.5f * density
+            canvas.drawPath(path, ringLinePaint)
         }
 
-        drawDeadZone(canvas, cx, cy, deadPx, data.state == TouchState.SECONDARY)
+        drawDeadZone(canvas, cx, cy, deadPx, data.state == TouchState.SECONDARY, accent)
 
         if (data.state == TouchState.SECONDARY) {
             drawSecondaryLabels(canvas, cx, cy, data.primaryChar, accent, data)
@@ -326,10 +358,6 @@ class RadialRenderer(
         }
     }
 
-    /**
-     * Cell label on a solid rounded backdrop; [active] brightens the
-     * label and outlines the backdrop with the current accent colour.
-     */
     private fun drawCellLabel(canvas: Canvas, x: Float, y: Float, text: String,
                               active: Boolean, accent: Int) {
         if (text.isEmpty()) return
@@ -340,6 +368,9 @@ class RadialRenderer(
         val r = 6f * density
         scratchRect.set(x - halfW - padX, y - halfH - padY,
                         x + halfW + padX, y + halfH + padY)
+        cellBackdropPaint.color =
+            if (active) 0x59000000.toInt() or (accent and 0x00FFFFFF)
+            else CELL_BACKDROP.toInt()
         canvas.drawRoundRect(scratchRect, r, r, cellBackdropPaint)
         cellBackdropStroke.color = if (active) accent else CELL_BORDER.toInt()
         canvas.drawRoundRect(scratchRect, r, r, cellBackdropStroke)
@@ -348,18 +379,34 @@ class RadialRenderer(
         canvas.drawText(text, x, baseline, menuLabelPaint)
     }
 
-    private fun drawDeadZone(canvas: Canvas, cx: Float, cy: Float, rPx: Float, isSecondary: Boolean) {
+    private fun drawDeadZone(canvas: Canvas, cx: Float, cy: Float, rPx: Float,
+                             isSecondary: Boolean, accent: Int) {
         canvas.drawCircle(cx, cy, rPx, deadFillPaint)
-        val rimColor = if (isSecondary) 0x66F7B96EL.toInt() else DEAD_RIM.toInt()
+        val rimColor = when {
+            isSecondary -> 0x66F7B96EL.toInt()
+            else        -> (0x66000000.toInt() or (accent and 0x00FFFFFF))
+        }
         deadRimPaint.color = rimColor
         if (isSecondary) {
-            drawCircleGlow(canvas, cx, cy, rPx, 0x88F7B96E.toInt())   // ← replaced
+            drawCircleGlow(canvas, cx, cy, rPx, 0x88F7B96E.toInt())
         }
         canvas.drawCircle(cx, cy, rPx, deadRimPaint)
     }
 
     private fun drawIdleZone(canvas: Canvas) {
         if (zoneRX <= 0f || zoneRY <= 0f) return
+
+        // Slow neon breath: 2.4 s sine cycle. Alpha-only animation —
+        // no allocations, safe for the redraw loop.
+        val phase = (System.currentTimeMillis() % 2400L) / 2400f
+        val breathe = 0.5f + 0.5f * sin(2f * Math.PI.toFloat() * phase)
+
+        glassIdlePaint.color = CYAN.toInt()
+        glassIdlePaint.alpha = (0x08 + 0x10 * breathe).toInt()   // 16..44
+        canvas.drawOval(zoneCX - zoneRX, zoneCY - zoneRY,
+            zoneCX + zoneRX, zoneCY + zoneRY, glassIdlePaint)
+
+        zoneStroke.alpha = (0x26 + 0x26 * breathe).toInt()        // 38..96
         canvas.drawOval(zoneCX - zoneRX, zoneCY - zoneRY,
             zoneCX + zoneRX, zoneCY + zoneRY, zoneStroke)
     }
@@ -426,7 +473,7 @@ class RadialRenderer(
         canvas.drawText(lines, pad, viewHeight - pad, hudPaint)
     }
     
-    private fun glowAlpha(layer: Int): Int = 0x50 - (layer - 1) * 0x1C   // 80, 52, 24
+    private fun glowAlpha(layer: Int): Int = 0x28 - (layer - 1) * 0x0E   // 40, 24, 8
 
     private fun drawRoundRectGlow(canvas: Canvas, rect: RectF, r: Float, color: Int) {
         for (layer in 1..3) {
@@ -475,8 +522,8 @@ class RadialRenderer(
     }
 
     private fun sectorColor(accent: Int, active: Boolean): Int =
-        if (active) 0x99000000.toInt() or (accent and 0x00FFFFFF)
-        else PANEL_BASE.toInt()
+        if (active) 0x2E000000.toInt() or (accent and 0x00FFFFFF)
+        else SECTOR_IDLE.toInt()
 
     private fun spToPx(sp: Float, context: Context): Float =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sp, context.resources.displayMetrics)
@@ -485,6 +532,10 @@ class RadialRenderer(
         style = Paint.Style.STROKE
         strokeWidth = 1.5f * density
         color = ZONE_STROKE.toInt()
-        pathEffect = DashPathEffect(floatArrayOf(8f * density, 8f * density), 0f)
+    }
+    
+    /** Idle-zone glass fill — color set per frame, alpha carries the breath. */
+    private val glassIdlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
     }
 }

@@ -68,12 +68,14 @@ class RadialKeyboardView(
     var screenOffsetY: Float = 0f
 
     private val zoneHintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x147AA2F7.toInt()      // faint glass fill
+    }
+
+    private val zoneRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1.5f * resources.displayMetrics.density
-        color = 0x597AA2F7.toInt()
-        pathEffect = DashPathEffect(
-            floatArrayOf(8f * resources.displayMetrics.density, 8f * resources.displayMetrics.density), 0f
-        )
+        color = 0x337AA2F7.toInt()      // quiet neon rim
     }
 
     val state: TouchState get() = touchStateMachine.state
@@ -96,10 +98,16 @@ class RadialKeyboardView(
         super.onDraw(canvas)
         if (!zoneReady) return
         val inset = 2f
-        canvas.drawOval(
+        val r = 12f * resources.displayMetrics.density
+        canvas.drawRoundRect(
             inset, inset,
             width - inset, height - inset,
-            zoneHintPaint
+            r, r, zoneHintPaint
+        )
+        canvas.drawRoundRect(
+            inset, inset,
+            width - inset, height - inset,
+            r, r, zoneRimPaint
         )
     }
 
