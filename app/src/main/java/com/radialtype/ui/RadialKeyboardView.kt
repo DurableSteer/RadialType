@@ -43,6 +43,7 @@ class RadialKeyboardView(
 
     companion object {
         private const val TAG = "RadialKeyboardView"
+        private const val VERBOSE_LOG = false
         private const val LABEL_LEAD_MS = 32f
         private const val MAX_LEAD_PX = 100f   // safety cap for flings
     }
@@ -107,7 +108,7 @@ class RadialKeyboardView(
         density = context.resources.displayMetrics.density
     ).apply {
         onStateChanged = { newState ->
-            Log.d(TAG, "State -> $newState")
+            if (VERBOSE_LOG) Log.d(TAG, "State -> $newState")
 
             if (lastHapticState == TouchState.PRIMARY && newState == TouchState.SECONDARY) {
                 haptics.pulseSecondaryEnter()
@@ -125,7 +126,7 @@ class RadialKeyboardView(
         }
         onCommit = {
             val label = selectionTracker.currentLabel()
-            Log.d(TAG, "Commit (seg=$currentSegment ring=$currentRing label=$label)")
+            if (VERBOSE_LOG) Log.d(TAG, "Commit (seg=$currentSegment ring=$currentRing label=$label)")
             when (label) {
                 CharacterMap.TOKEN_SPACE -> inputDispatcher?.commitSpace()
                 CharacterMap.TOKEN_ENTER -> inputDispatcher?.commitEnter()
@@ -142,7 +143,7 @@ class RadialKeyboardView(
             }
         }
         onRingChanged = { ring ->
-            Log.d(TAG, "Ring changed -> $ring (prev=$previousRing)")
+            if (VERBOSE_LOG) Log.d(TAG, "Ring changed -> $ring (prev=$previousRing)")
 
             // Deadzone exit: NONE → any ring, fires on both PRIMARY and SECONDARY.
             if (previousRing == GeometryEngine.Ring.NONE && ring != GeometryEngine.Ring.NONE) {
@@ -158,22 +159,22 @@ class RadialKeyboardView(
             }
         }
         onSegmentChanged = { segment ->
-            Log.d(TAG, "Segment changed -> $segment")
+            if (VERBOSE_LOG) Log.d(TAG, "Segment changed -> $segment")
             selectionTracker.update(currentRing, currentSegment)
         }
 
         onDeleteProgress = { left, right ->
-            Log.d(TAG, "Delete progress: -$left +$right")
+            if (VERBOSE_LOG) Log.d(TAG, "Delete progress: -$left +$right")
             inputDispatcher?.previewDeleteRange(left, right)
             pushFrame()
         }
         onDeleteCommit = { left, right ->
-            Log.d(TAG, "Delete commit: -$left +$right")
+            if (VERBOSE_LOG) Log.d(TAG, "Delete commit: -$left +$right")
             inputDispatcher?.deleteRange(left, right)
             pushFrame()
         }
         onDeleteCancelled = {
-            Log.d(TAG, "Delete cancelled")
+            if (VERBOSE_LOG) Log.d(TAG, "Delete cancelled")
             inputDispatcher?.cancelDeletePreview()
             pushFrame()
         }
