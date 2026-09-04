@@ -15,6 +15,30 @@
         <item>system_click</item>
         <item>system_heavy</item>
     </string-array>
+    <string-array name="hand_preset_names">
+        <item>Right thumb</item>
+        <item>Left thumb</item>
+        <item>Symmetric (circle)</item>
+    </string-array>
+    <string-array name="hand_preset_values">
+        <item>right</item>
+        <item>left</item>
+        <item>circle</item>
+    </string-array>
+    <string-array name="reach_direction_names">
+        <item>East</item>
+        <item>Southeast</item>
+        <item>South</item>
+        <item>Southwest</item>
+        <item>West</item>
+        <item>Northwest</item>
+        <item>North</item>
+        <item>Northeast</item>
+    </string-array>
+    <string-array name="reach_direction_values">
+        <item>0</item><item>1</item><item>2</item><item>3</item>
+        <item>4</item><item>5</item><item>6</item><item>7</item>
+    </string-array>
 
     <!-- Layout editor -->
     <string name="layout_editor_hint">Enter a JSON layout (lowercase letters recommended). Each ring array has 8 slots (segment 0 = east, clockwise). Tokens: ENTER, SHIFT, SPACE. Optional "digits" and "symbols" objects ({ "inner": […], "outer": […] }) customize the double-tap up/down menus.</string>

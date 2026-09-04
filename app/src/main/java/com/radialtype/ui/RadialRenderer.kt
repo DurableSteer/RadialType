@@ -40,6 +40,7 @@ class RadialRenderData(
     val deleteRightCount: Int = 0,
     val cursorDx: Int = 0,
     val cursorDy: Int = 0,
+    val lockedSegment: Int = -1,
     val mode: com.radialtype.engine.LayoutMode = com.radialtype.engine.LayoutMode.LETTERS,
     val pushTimeMs: Long = android.os.SystemClock.uptimeMillis()
 )
@@ -82,6 +83,8 @@ class RadialRenderer(
     var debugMode: Boolean = true
     var perfHud: PerfHud? = null
     var showIdleZoneHint: Boolean = true
+    
+    var reachProfile: FloatArray = FloatArray(8) { 1f }
 
     var deadZoneRadius: Float = GeometryEngine.DEAD_ZONE_RADIUS
     var innerRadiusMax: Float = GeometryEngine.INNER_RADIUS_MAX
@@ -177,12 +180,10 @@ class RadialRenderer(
             deadZoneRadius = SettingsManager.deadzoneRadius
             innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
             outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
+            reachProfile = SettingsManager.reachProfile.copyOf()
         }
 
         if (data.state == TouchState.IDLE || data.state == TouchState.AXIS_PENDING) {
-            // Idle styling is owned by the pad view itself — the overlay
-            // window doesn't exist in IDLE, so anything drawn here only
-            // flashes during teardown frames (the "flicker").
             return
         }
 
@@ -292,33 +293,40 @@ class RadialRenderer(
     }
 
     private fun drawMenu(canvas: Canvas, cx: Float, cy: Float, accent: Int, data: RadialRenderData) {
-        val deadPx = deadZoneRadius * density
-        val boundaryPx = innerRadiusMax * density
-        val outerPx = outerRadiusMax * density
 
         // Glass sectors: idle cells are near-invisible; the active cell
-        // is the only one that fills with color.
+        // is the only one that fills with color. Paths are built from
+        // dp base radii and scale by the reach profile internally.
         for (seg in 0 until 8) {
-            drawAnnularSlice(canvas, cx, cy, deadPx, boundaryPx, seg,
+            drawAnnularSlice(canvas, cx, cy, deadZoneRadius, innerRadiusMax, seg,
                 sectorColor(accent, data.ring == Ring.INNER && data.segment == seg))
-            drawAnnularSlice(canvas, cx, cy, boundaryPx, outerPx, seg,
+            drawAnnularSlice(canvas, cx, cy, innerRadiusMax, outerRadiusMax, seg,
                 sectorColor(accent, data.ring == Ring.OUTER && data.segment == seg))
         }
+        
+        // Angle-lock corridor: whisper tint over the whole locked
+        // column so the pin is visible before any drift is felt.
+        if (data.lockedSegment in 0 until 8) {
+            val tint = 0x14000000.toInt() or (accent and 0x00FFFFFF)
+            drawAnnularSlice(canvas, cx, cy, deadZoneRadius, innerRadiusMax,
+                data.lockedSegment, tint)
+            drawAnnularSlice(canvas, cx, cy, innerRadiusMax, outerRadiusMax,
+                data.lockedSegment, tint)
+        }
 
-        // Structure: one hairline circle per ring boundary instead of
-        // per-cell borders — reads as a neon instrument, not a grid.
+        // Structure: one profile-following outline per ring boundary —
+        // reads as a neon instrument, not a grid.
         ringLinePaint.color = LINE_FAINT.toInt()
-        canvas.drawCircle(cx, cy, outerPx, ringLinePaint)
+        drawProfileRing(canvas, cx, cy, outerRadiusMax, ringLinePaint)
         ringLinePaint.color = LINE_STRONG.toInt()
-        canvas.drawCircle(cx, cy, boundaryPx, ringLinePaint)
+        drawProfileRing(canvas, cx, cy, innerRadiusMax, ringLinePaint)
 
         if (data.ring != Ring.NONE && data.segment in 0 until 8) {
-            val lo = if (data.ring == Ring.INNER) deadPx else boundaryPx
-            val hi = if (data.ring == Ring.INNER) boundaryPx else outerPx
+            val lo = if (data.ring == Ring.INNER) deadZoneRadius else innerRadiusMax
+            val hi = if (data.ring == Ring.INNER) innerRadiusMax else outerRadiusMax
             val path = annularSlicePath(cx, cy, lo, hi, data.segment)
 
-            // Soft halo, then a crisp single-width accent line. Half the
-            // old stroke width keeps the glow tight to the sector edge.
+            // Soft halo, then a crisp single-width accent line.
             for (layer in 1..3) {
                 glowStrokePaint.color = accent
                 glowStrokePaint.alpha = glowAlpha(layer)
@@ -330,7 +338,7 @@ class RadialRenderer(
             canvas.drawPath(path, ringLinePaint)
         }
 
-        drawDeadZone(canvas, cx, cy, deadPx, data.state == TouchState.SECONDARY, accent)
+        drawDeadZone(canvas, cx, cy, deadZoneRadius, data.state == TouchState.SECONDARY, accent)
 
         if (data.state == TouchState.SECONDARY) {
             drawSecondaryLabels(canvas, cx, cy, data.primaryChar, accent, data)
@@ -338,25 +346,25 @@ class RadialRenderer(
             drawPrimaryLabels(canvas, cx, cy, data.mode, accent, data)
         }
     }
-
+    
     private fun drawPrimaryLabels(canvas: Canvas, cx: Float, cy: Float,
                                   mode: com.radialtype.engine.LayoutMode,
                                   accent: Int, data: RadialRenderData) {
-        val deadPx = deadZoneRadius * density
-        val boundaryPx = innerRadiusMax * density
-        val outerPx = outerRadiusMax * density
-        val midInner = (deadPx + boundaryPx) / 2f
-        val midOuter = (boundaryPx + outerPx) / 2f
+        val midInnerDp = (deadZoneRadius + innerRadiusMax) / 2f
+        val midOuterDp = (innerRadiusMax + outerRadiusMax) / 2f
         val (innerChars, outerChars) = characterMap.ringsFor(mode)
 
         for (seg in 0 until 8) {
-            val rad = Math.toRadians((seg * 45f).toDouble())
+            val theta = seg * 45f          // segment centre bearing — unchanged
+            val rad = Math.toRadians(theta.toDouble())
             val dx = cos(rad).toFloat()
             val dy = sin(rad).toFloat()
-            drawCellLabel(canvas, cx + dx * midInner, cy + dy * midInner,
+            val rInner = boundaryPxAt(midInnerDp, theta)
+            val rOuter = boundaryPxAt(midOuterDp, theta)
+            drawCellLabel(canvas, cx + dx * rInner, cy + dy * rInner,
                 innerChars.getOrElse(seg) { "" },
                 data.ring == Ring.INNER && data.segment == seg, accent)
-            drawCellLabel(canvas, cx + dx * midOuter, cy + dy * midOuter,
+            drawCellLabel(canvas, cx + dx * rOuter, cy + dy * rOuter,
                 outerChars.getOrElse(seg) { "" },
                 data.ring == Ring.OUTER && data.segment == seg, accent)
         }
@@ -364,20 +372,20 @@ class RadialRenderer(
 
     private fun drawSecondaryLabels(canvas: Canvas, cx: Float, cy: Float,
                                     primaryChar: String, accent: Int, data: RadialRenderData) {
-        val deadPx = deadZoneRadius * density
-        val boundaryPx = innerRadiusMax * density
-        val outerPx = outerRadiusMax * density
-        val midInner = (deadPx + boundaryPx) / 2f
-        val midOuter = (boundaryPx + outerPx) / 2f
+        val midInnerDp = (deadZoneRadius + innerRadiusMax) / 2f
+        val midOuterDp = (innerRadiusMax + outerRadiusMax) / 2f
 
         for (seg in 0 until 8) {
-            val rad = Math.toRadians((seg * 45f).toDouble())
+            val theta = seg * 45f
+            val rad = Math.toRadians(theta.toDouble())
             val dx = cos(rad).toFloat()
             val dy = sin(rad).toFloat()
-            drawCellLabel(canvas, cx + dx * midInner, cy + dy * midInner,
+            val rInner = boundaryPxAt(midInnerDp, theta)
+            val rOuter = boundaryPxAt(midOuterDp, theta)
+            drawCellLabel(canvas, cx + dx * rInner, cy + dy * rInner,
                 syllableProvider.getSyllable(primaryChar, Ring.INNER, seg),
                 data.ring == Ring.INNER && data.segment == seg, accent)
-            drawCellLabel(canvas, cx + dx * midOuter, cy + dy * midOuter,
+            drawCellLabel(canvas, cx + dx * rOuter, cy + dy * rOuter,
                 syllableProvider.getSyllable(primaryChar, Ring.OUTER, seg),
                 data.ring == Ring.OUTER && data.segment == seg, accent)
         }
@@ -404,18 +412,30 @@ class RadialRenderer(
         canvas.drawText(text, x, baseline, menuLabelPaint)
     }
 
-    private fun drawDeadZone(canvas: Canvas, cx: Float, cy: Float, rPx: Float,
+    private fun drawDeadZone(canvas: Canvas, cx: Float, cy: Float, rDp: Float,
                              isSecondary: Boolean, accent: Int) {
-        canvas.drawCircle(cx, cy, rPx, deadFillPaint)
+        scratchPath.reset()
+        val steps = 72
+        for (i in 0..steps) {
+            val a = i * 360f / steps
+            val r = boundaryPxAt(rDp, a)
+            val rad = Math.toRadians(a.toDouble())
+            val x = cx + (Math.cos(rad) * r).toFloat()
+            val y = cy + (Math.sin(rad) * r).toFloat()
+            if (i == 0) scratchPath.moveTo(x, y) else scratchPath.lineTo(x, y)
+        }
+        scratchPath.close()
+
+        canvas.drawPath(scratchPath, deadFillPaint)
         val rimColor = when {
-            isSecondary -> 0x66F7B96EL.toInt()
+            isSecondary -> 0x66F7B96E.toInt()
             else        -> (0x66000000.toInt() or (accent and 0x00FFFFFF))
         }
         deadRimPaint.color = rimColor
         if (isSecondary) {
-            drawCircleGlow(canvas, cx, cy, rPx, 0x88F7B96E.toInt())
+            drawPathGlow(canvas, scratchPath, 0x88F7B96E.toInt())
         }
-        canvas.drawCircle(cx, cy, rPx, deadRimPaint)
+        canvas.drawPath(scratchPath, deadRimPaint)
     }
 
     private fun drawIdleZone(canvas: Canvas) {
@@ -568,21 +588,71 @@ class RadialRenderer(
             canvas.drawPath(path, glowStrokePaint)
         }
     }
+    
+    /** Same profile math the FSM's GeometryEngine classifies with. */
+    private fun reachAt(angleDeg: Float): Float =
+        GeometryEngine.reachFactorAt(angleDeg, reachProfile)
 
-    private fun annularSlicePath(cx: Float, cy: Float, rInner: Float, rOuter: Float, seg: Int): Path {
-        val start = seg * 45f - 22.5f
+    /** Boundary radius in px for a dp base radius at a bearing. */
+    private fun boundaryPxAt(baseRadiusDp: Float, angleDeg: Float): Float =
+        baseRadiusDp * density * reachAt(angleDeg)
+
+    /** Closed profile-following outline for a ring boundary. */
+    private fun drawProfileRing(canvas: Canvas, cx: Float, cy: Float,
+                                baseRadiusDp: Float, paint: Paint) {
+        if (reachProfile.all { it >= 0.999f }) {   // legacy: exact circle
+            canvas.drawCircle(cx, cy, baseRadiusDp * density, paint)
+            return
+        }
         scratchPath.reset()
-        scratchRect.set(cx - rOuter, cy - rOuter, cx + rOuter, cy + rOuter)
-        scratchPath.arcTo(scratchRect, start, 45f, false)
-        scratchRect.set(cx - rInner, cy - rInner, cx + rInner, cy + rInner)
-        scratchPath.arcTo(scratchRect, start + 45f, -45f, true)
+        val steps = 72
+        for (i in 0..steps) {
+            val a = i * 360f / steps
+            val r = boundaryPxAt(baseRadiusDp, a)
+            val rad = Math.toRadians(a.toDouble())
+            val x = cx + (Math.cos(rad) * r).toFloat()
+            val y = cy + (Math.sin(rad) * r).toFloat()
+            if (i == 0) scratchPath.moveTo(x, y) else scratchPath.lineTo(x, y)
+        }
+        canvas.drawPath(scratchPath, paint)
+    }
+     /**
+     * Annular slice bounded by the reach profile. Segment k spans the
+     * angular range [k·45 − 22.5, k·45 + 22.5] — exactly the range
+     * GeometryEngine.computeSegment classifies into — sampled along
+     * both boundaries at 8 steps so the curved edges track the profile.
+     * Both radii are dp bases; f(θ) scales them per sampled bearing.
+     */
+    private fun annularSlicePath(cx: Float, cy: Float,
+                                  rInnerDp: Float, rOuterDp: Float, seg: Int): Path {
+        val start = seg * 45f - 22.5f
+        val sweep = 45f
+        val steps = 8
+        scratchPath.reset()
+        for (i in 0..steps) {
+            val a = start + sweep * i / steps
+            val r = boundaryPxAt(rOuterDp, a)
+            val rad = Math.toRadians(a.toDouble())
+            val x = cx + (Math.cos(rad) * r).toFloat()
+            val y = cy + (Math.sin(rad) * r).toFloat()
+            if (i == 0) scratchPath.moveTo(x, y) else scratchPath.lineTo(x, y)
+        }
+        for (i in steps downTo 0) {
+            val a = start + sweep * i / steps
+            val r = boundaryPxAt(rInnerDp, a)
+            val rad = Math.toRadians(a.toDouble())
+            scratchPath.lineTo(
+                cx + (Math.cos(rad) * r).toFloat(),
+                cy + (Math.sin(rad) * r).toFloat()
+            )
+        }
         scratchPath.close()
         return scratchPath
     }
 
     private fun drawAnnularSlice(canvas: Canvas, cx: Float, cy: Float,
-                                 rInner: Float, rOuter: Float, seg: Int, fillColor: Int) {
-        val path = annularSlicePath(cx, cy, rInner, rOuter, seg)
+                                 rInnerDp: Float, rOuterDp: Float, seg: Int, fillColor: Int) {
+        val path = annularSlicePath(cx, cy, rInnerDp, rOuterDp, seg)
         sectorFillPaint.color = fillColor
         canvas.drawPath(path, sectorFillPaint)
     }

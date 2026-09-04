@@ -7,6 +7,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.preference.Preference
+import androidx.preference.ListPreference
+import androidx.preference.SeekBarPreference
 import androidx.preference.PreferenceFragmentCompat
 import com.radialtype.R
 import com.radialtype.text.LanguagePack
@@ -32,6 +34,19 @@ class SettingsFragment : PreferenceFragmentCompat() {
         findPreference<Preference>(SettingsManager.KEY_REGENERATE_LAYOUT)
             ?.setOnPreferenceClickListener {
                 regenerateLayout()
+                true
+            }
+        // Applying a handedness preset seeds all eight reach sliders
+        // (and the underlying prefs) in one shot; the sliders stay
+        // individually editable afterwards.
+        findPreference<ListPreference>(SettingsManager.KEY_HAND_PRESET)
+            ?.setOnPreferenceChangeListener { _, newValue ->
+                val percents = SettingsManager.presetProfile(newValue.toString())
+                SettingsManager.setReachProfile(percents)
+                // Keep the visible sliders in sync with what we wrote.
+                percents.forEachIndexed { seg, v ->
+                    findPreference<SeekBarPreference>(SettingsManager.keyForReach(seg))?.value = v
+                }
                 true
             }
     }

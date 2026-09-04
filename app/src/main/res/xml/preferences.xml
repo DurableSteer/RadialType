@@ -40,13 +40,13 @@
             android:summary="Custom pulses, or crisp system effects where supported"
             android:entries="@array/haptic_style_names"
             android:entryValues="@array/haptic_style_values"
-            android:defaultValue="legacy"
+            android:defaultValue="crisp"
             android:dependency="haptic_feedback" />
 
         <SeekBarPreference
             android:key="haptic_tick_intensity"
             android:title="Delete tick strength"
-            android:summary="Strength of each delete-selection tick (18 ms fixed)"
+            android:summary="Strength of each delete-selection tick"
             android:defaultValue="96"
             app:min="10"
             android:max="255"
@@ -57,42 +57,42 @@
             android:key="haptic_progressive_ticks"
             android:title="Progressive delete ticks"
             android:summary="Each successive tick in one drag gets slightly stronger"
-            android:defaultValue="false"
+            android:defaultValue="true"
             android:dependency="haptic_feedback" />
 
         <SwitchPreferenceCompat
             android:key="haptic_deadzone_exit"
             android:title="Pulse on deadzone exit"
             android:summary="Vibrate when the finger leaves the centre deadzone"
-            android:defaultValue="false"
+            android:defaultValue="true"
             android:dependency="haptic_feedback" />
 
         <SwitchPreferenceCompat
             android:key="haptic_secondary_enter"
             android:title="Pulse on secondary menu"
             android:summary="Vibrate when entering the secondary (syllable) menu"
-            android:defaultValue="true"
+            android:defaultValue="false"
             android:dependency="haptic_feedback" />
 
         <SwitchPreferenceCompat
             android:key="haptic_secondary_ring_out"
             android:title="Pulse on outer ring"
             android:summary="Vibrate when moving from inner to outer ring on the secondary menu"
-            android:defaultValue="true"
+            android:defaultValue="false"
             android:dependency="haptic_feedback" />
         
         <SwitchPreferenceCompat
             android:key="haptic_label_touch"
             android:title="Tick on cell entry"
             android:summary="Brief tick whenever the finger lands on a populated cell"
-            android:defaultValue="true"
+            android:defaultValue="false"
             android:dependency="haptic_feedback" />
 
         <SwitchPreferenceCompat
             android:key="haptic_ring_cross"
             android:title="Click on ring crossing"
             android:summary="Light click when dragging between the inner and outer ring"
-            android:defaultValue="true"
+            android:defaultValue="false"
             android:dependency="haptic_feedback" />
         
         <SwitchPreferenceCompat
@@ -114,7 +114,7 @@
             android:key="dwell_duration"
             android:title="Dwell duration (ms)"
             android:summary="How long the finger must rest before the secondary syllable menu opens"
-            android:defaultValue="50"
+            android:defaultValue="100"
             app:min="1"
             android:max="800"
             app:showSeekBarValue="true" />
@@ -136,17 +136,23 @@
         <SeekBarPreference
             android:key="ring_hysteresis"
             android:title="Ring hysteresis (dp)"
-            android:summary="Retained-ring deadband near ring boundaries (8.0 dp default)"
-            android:defaultValue="80"
+            android:summary="Retained-ring deadband near ring boundaries"
+            android:defaultValue="0"
             app:min="0"
             android:max="160"
             app:showSeekBarValue="true" />
+            
+        <SwitchPreferenceCompat
+            android:key="angle_lock"
+            android:title="Angle lock"
+            android:summary="Once a column is entered, sideways drift is ignored until you return to the centre or lift."
+            android:defaultValue="false" />
 
         <SeekBarPreference
             android:key="segment_hysteresis"
             android:title="Segment hysteresis (degrees)"
             android:summary="Angular deadzone around segment boundaries (2.0° default)"
-            android:defaultValue="20"
+            android:defaultValue="50"
             app:min="0"
             android:max="50"
             app:showSeekBarValue="true" />
@@ -246,11 +252,75 @@
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Advanced — Ring geometry">
+        <ListPreference
+            android:key="hand_preset"
+            android:title="Handedness preset"
+            android:summary="Seed the reach profile for your gripping hand — then fine-tune individual directions below"
+            android:entries="@array/hand_preset_names"
+            android:entryValues="@array/hand_preset_values"
+            android:defaultValue="right" />
+
+        <SeekBarPreference
+            android:key="reach_0"
+            android:title="Reach — East (%)"
+            android:summary="Relative band extent toward east; 100 = longest axis of the shape"
+            android:defaultValue="90"
+            app:min="50" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="reach_1"
+            android:title="Reach — Southeast (%)"
+            android:summary="Relative band extent toward southeast"
+            android:defaultValue="80"
+            app:min="50" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="reach_2"
+            android:title="Reach — South (%)"
+            android:summary="Relative band extent toward south"
+            android:defaultValue="100"
+            app:min="50" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="reach_3"
+            android:title="Reach — Southwest (%)"
+            android:summary="Relative band extent toward southwest"
+            android:defaultValue="95"
+            app:min="50" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="reach_4"
+            android:title="Reach — West (%)"
+            android:summary="Relative band extent toward west"
+            android:defaultValue="90"
+            app:min="50" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="reach_5"
+            android:title="Reach — Northwest (%)"
+            android:summary="Relative band extent toward northwest"
+            android:defaultValue="90"
+            app:min="50" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="reach_6"
+            android:title="Reach — North (%)"
+            android:summary="Relative band extent toward north"
+            android:defaultValue="95"
+            app:min="50" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="reach_7"
+            android:title="Reach — Northeast (%)"
+            android:summary="Relative band extent toward northeast"
+            android:defaultValue="100"
+            app:min="50" android:max="100" app:showSeekBarValue="true" />
+            
         <SeekBarPreference
             android:key="deadzone_radius"
             android:title="Deadzone size (dp)"
             android:summary="Radius of the centre zone where no character is selected"
-            android:defaultValue="20"
+            android:defaultValue="32"
             app:min="5"
             android:max="50"
             app:showSeekBarValue="true" />
@@ -259,7 +329,7 @@
             android:key="inner_ring_radius"
             android:title="Inner ring outer edge (dp)"
             android:summary="Outside radius of the inner row — lowering it squishes the inner ring"
-            android:defaultValue="50"
+            android:defaultValue="60"
             app:min="30"
             android:max="100"
             app:showSeekBarValue="true" />
@@ -268,7 +338,7 @@
             android:key="outer_ring_radius"
             android:title="Outer ring outer edge (dp)"
             android:summary="Outermost radius of the menu — lowering it squishes the outer row"
-            android:defaultValue="80"
+            android:defaultValue="90"
             app:min="60"
             android:max="200"
             app:showSeekBarValue="true" />

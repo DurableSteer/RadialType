@@ -53,11 +53,14 @@ object SettingsManager {
     const val KEY_LANGUAGE_SECONDARY = "language_secondary"
     const val KEY_LANGUAGE_MIX_RATIO = "language_mix_ratio"
     const val KEY_REGENERATE_LAYOUT = "regenerate_layout"
+    const val KEY_REACH_PREFIX = "reach_"
+    const val KEY_HAND_PRESET = "hand_preset"
+    const val KEY_ANGLE_LOCK = "angle_lock"
 
     // ── Bounds & defaults ────────────────────────────────────────
     const val DWELL_MIN = 1
     const val DWELL_MAX = 800
-    const val DWELL_DEFAULT = 50
+    const val DWELL_DEFAULT = 100
 
     const val VIBRATION_MIN = 1
     const val VIBRATION_MAX = 150
@@ -102,27 +105,38 @@ object SettingsManager {
     const val MODE_GRACE_MIN = 0
     const val MODE_GRACE_MAX = 300
     const val MODE_GRACE_DEFAULT = 120
+    
+    // Per-direction reach, percent. 100 = full reach (longest axis of
+    // the shape), 50 = half. Values are RELATIVE: the getter
+    // normalizes the maximum to 1.0, so "all 60" is a circle.
+    const val REACH_MIN = 50
+    const val REACH_MAX = 100
+    const val REACH_DEFAULT = 100
+
+    const val PRESET_RIGHT = "right"
+    const val PRESET_LEFT = "left"
+    const val PRESET_CIRCLE = "circle"
 
     const val INNER_RING_MIN = 40f
     const val INNER_RING_MAX = 140f
-    const val INNER_RING_DEFAULT = 50f
+    const val INNER_RING_DEFAULT = 60f
 
     const val OUTER_RING_MIN = 80f
     const val OUTER_RING_MAX = 240f
-    const val OUTER_RING_DEFAULT = 80f
+    const val OUTER_RING_DEFAULT = 90f
 
     const val DEADZONE_MIN = 10f
     const val DEADZONE_MAX = 60f
-    const val DEADZONE_DEFAULT = 20f
+    const val DEADZONE_DEFAULT = 32f
     
     // ── Hysteresis bounds (stored in tenths) ─────────────────────
     const val RING_HYSTERESIS_MIN = 0      // 0.0 dp
     const val RING_HYSTERESIS_MAX = 160    // 16.0 dp
-    const val RING_HYSTERESIS_DEFAULT = 80 // 8.0 dp (legacy constant)
+    const val RING_HYSTERESIS_DEFAULT = 0 // 8.0 dp (legacy constant)
 
     const val SEGMENT_HYSTERESIS_MIN = 0   // 0.0°
     const val SEGMENT_HYSTERESIS_MAX = 50  // 5.0°
-    const val SEGMENT_HYSTERESIS_DEFAULT = 20 // 2.0° per Module 13 spec
+    const val SEGMENT_HYSTERESIS_DEFAULT = 50 //
 
     const val FLOATING_OFFSET_MIN = 60
     const val FLOATING_OFFSET_MAX = 320
@@ -196,37 +210,43 @@ object SettingsManager {
 
     /** Rising-amplitude delete ticks (crescendo within one gesture). */
     var hapticProgressiveTicks: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_PROGRESSIVE, false) ?: false
+        get() = prefs?.getBoolean(KEY_HAPTIC_PROGRESSIVE, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTIC_PROGRESSIVE, value) }
 
     var hapticDeadzoneExit: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_DEADZONE_EXIT, false) ?: false
+        get() = prefs?.getBoolean(KEY_HAPTIC_DEADZONE_EXIT, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTIC_DEADZONE_EXIT, value) }
 
     /** Haptic pulse on PRIMARY → SECONDARY transition. */
     var hapticSecondaryEnter: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_ENTER, true) ?: true
+        get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_ENTER, false) ?: false
         set(value) = put { it.putBoolean(KEY_HAPTIC_SECONDARY_ENTER, value) }
 
     /** Haptic pulse on secondary INNER → OUTER ring transition. */
     var hapticSecondaryRingOut: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, true) ?: true
+        get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, false) ?: false
         set(value) = put { it.putBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, value) }
     
     /** Tick when the finger lands on a cell that has a label. */
     var hapticLabelTouch: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_LABEL_TOUCH, true) ?: true
+        get() = prefs?.getBoolean(KEY_HAPTIC_LABEL_TOUCH, false) ?: false
         set(value) = put { it.putBoolean(KEY_HAPTIC_LABEL_TOUCH, value) }
 
     /** Light click on crossing between the inner and outer ring. */
     var hapticRingCross: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_RING_CROSS, true) ?: true
+        get() = prefs?.getBoolean(KEY_HAPTIC_RING_CROSS, false) ?: false
         set(value) = put { it.putBoolean(KEY_HAPTIC_RING_CROSS, value) }
     
     /** Sub-toggle for the delete-mode per-character tick. */
     var hapticDeleteTick: Boolean
         get() = prefs?.getBoolean(KEY_HAPTIC_DELETE_TICK, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTIC_DELETE_TICK, value) }
+    
+    /** Pin the selected column for the rest of the excursion — sideways
+     *  drift is ignored; return to the deadzone (or lift) to re-aim. */
+    var angleLockEnabled: Boolean
+        get() = prefs?.getBoolean(KEY_ANGLE_LOCK, false) ?: false
+        set(value) = put { it.putBoolean(KEY_ANGLE_LOCK, value) }
 
     var autoSpaceEnabled: Boolean
         get() = prefs?.getBoolean(KEY_AUTO_SPACE, false) ?: false
@@ -339,6 +359,54 @@ object SettingsManager {
         set(value) = put {
             it.putInt(KEY_CURSOR_SENS_V, (value * 10f).toInt().coerceIn(1, 100))
         }
+    
+    // ── Thumb-reach profile (per cardinal direction) ───────────
+  
+    fun keyForReach(segment: Int): String = KEY_REACH_PREFIX + segment
+
+    /** Raw percent (REACH_MIN..REACH_MAX) for segment 0..7. */
+    fun reachValue(segment: Int): Int {
+        val seg = segment.coerceIn(0, 7)
+        return clamp(
+            prefs?.getInt(keyForReach(seg), REACH_DEFAULT) ?: REACH_DEFAULT,
+            REACH_MIN, REACH_MAX
+        )
+    }
+
+    /**
+     * The 8-entry reach profile, each entry in 0.5..1.0, normalized so
+     * the MAXIMUM is always 1.0 (sliders express relative compression;
+     * overall menu scale stays governed by the outer-radius slider).
+     * Defensive: any missing value falls back to full reach.
+     */
+    val reachProfile: FloatArray
+        get() {
+            val raw = IntArray(8) { reachValue(it) }
+            val max = raw.maxOrNull() ?: REACH_MAX
+            return FloatArray(8) { raw[it] / max.toFloat() }
+        }
+
+    /** Writes percent values for all 8 directions (values clamped). */
+    fun setReachProfile(percentValues: IntArray) {
+        put {
+            for (i in 0 until 8) {
+                it.putInt(keyForReach(i),
+                    percentValues.getOrElse(i) { REACH_DEFAULT }.coerceIn(REACH_MIN, REACH_MAX))
+            }
+        }
+    }
+
+    /**
+     * Seed profiles for the handedness preset. Right thumb: pivot at
+     * bottom-right, so reach is shortest toward the thumb base (E/SE)
+     * and longest toward W/NW. Left thumb is the mirror. Circle is
+     * the legacy perfect annulus.
+     */
+    fun presetProfile(presetId: String): IntArray = when (presetId) {
+        PRESET_LEFT  -> intArrayOf(100, 90, 80, 70, 65, 78, 90, 100)
+        PRESET_CIRCLE -> IntArray(8) { REACH_MAX }
+        else          -> intArrayOf(90, 80, 100, 95, 90, 90, 95, 100)
+    }
 
     /** Neutral radius (dp) around the entry point before cursor movement begins. */
     var cursorDeadzoneDp: Float

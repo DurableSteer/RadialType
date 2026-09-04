@@ -371,6 +371,29 @@ class TouchStateMachine(
             if (mode == LayoutMode.NUMBERS) TouchState.NUMBER else TouchState.SYMBOL
         )
     }
+    
+    /**
+     * Clears cell-signalling bookkeeping AND the angle lock; the next
+     * populated cell re-signals and re-locks. Called at every context
+     * boundary: state entries, ACTION_DOWN, and deadzone entry.
+     */
+    private fun resetSignaledCell() {
+        signaledRing = Ring.NONE
+        signaledSegment = -1
+        lockedSegment = -1
+    }
+    
+    /**
+     * Angle-lock state: the pinned segment of the current excursion,
+     * or −1 when unlocked (new gesture, finger in deadzone, or inside
+     * the secondary menu). Only meaningful when the setting is on.
+     */
+    var lockedSegment: Int = -1
+        private set
+
+    private fun angleLockEnabled(): Boolean =
+        if (SettingsManager.isInitialized) SettingsManager.angleLockEnabled
+        else false
 
     // ── Handlers ─────────────────────────────────────────────────
 
@@ -671,19 +694,20 @@ class TouchStateMachine(
      *              change and the lift happened within the same
      *              [SEGMENT_SUPPRESSION_MS] window (micro-flick case).
      */
-    private fun resolveGeometry(anchorX: Float, anchorY: Float, final: Boolean = false) {
+     private fun resolveGeometry(anchorX: Float, anchorY: Float, final: Boolean = false) {
         val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
         val distDp = GeometryEngine.pxToDp(distPx, density)
         val angleDeg = geometryEngine.angle(anchorX, anchorY, currentX, currentY)
 
-        val newRing = geometryEngine.computeRing(distDp, currentRing)
+        val newRing = geometryEngine.computeRing(distDp, angleDeg, currentRing)
 
         if (newRing != currentRing) {
             previousRing = currentRing
             currentRing = newRing
             if (newRing == Ring.NONE) {
                 // Entering the deadzone deselects everything — and any
-                // cell the finger later re-enters must signal again.
+                // cell the finger later re-enters must signal again. It
+                // also releases the angle lock (deliberate re-aim).
                 previousSegment = currentSegment
                 currentSegment = -1
                 resetSignaledCell()
@@ -693,12 +717,26 @@ class TouchStateMachine(
             dwellTimer.reset()
         }
 
-        val newSegment = geometryEngine.computeSegment(angleDeg, currentSegment)
+        val rawSegment = geometryEngine.computeSegment(angleDeg, currentSegment)
 
-        // Suppression window masks boundary jitter mid-gesture — but a
-        // final (UP) resolution must never be masked, or the gesture
-        // ends with no segment to commit. Hysteresis (2° angular,
-        // tunable) carries jitter defense instead.
+        // ── Angle lock ────────────────────────────────────────────
+        // First populated segment of an excursion is ADOPTED as the
+        // locked column; afterwards the finger is pinned to it. Escape
+        // routes: deadzone (cleared above), lift, or entering the
+        // secondary menu (resetSignaledCell in enterSecondary). The
+        // deadzone-edge hysteresis linger means grazing the deadzone
+        // boundary mid-drift does NOT unlock — only a real re-entry
+        // into NONE releases the pin, so sloppy edges don't fight the
+        // very drift suppression the lock exists for.
+        var newSegment = rawSegment
+        if (angleLockEnabled() && newRing != Ring.NONE) {
+            if (lockedSegment < 0) {
+                lockedSegment = rawSegment
+            } else {
+                newSegment = lockedSegment
+            }
+        }
+
         val timeSinceRingChange = currentEventTime - lastRingChangeTime
         val suppressed = !final &&
               currentSegment != -1 &&
@@ -711,17 +749,6 @@ class TouchStateMachine(
             dwellTimer.reset()
         }
 
-        // ── Cell-entry signal ─────────────────────────────────────
-        // Fires for every distinct (ring, segment) cell the finger
-        // occupies, independently of the segment-change event above.
-        // Critical difference: a radial crossing inner ↔ outer keeps
-        // the segment index constant, so onSegmentChanged never fires
-        // for it — yet the finger HAS entered a different label. The
-        // signaled-cell bookkeeping catches that case (and re-entry
-        // after a deadzone visit, cleared above). The suppression
-        // window does NOT gate this signal: a ring crossing lands the
-        // finger in a new cell by definition, and ring/segment
-        // hysteresis already absorbs jitter.
         if (currentRing != Ring.NONE && currentSegment != -1 &&
             (currentRing != signaledRing || currentSegment != signaledSegment)
         ) {
@@ -729,12 +756,6 @@ class TouchStateMachine(
             signaledSegment = currentSegment
             onCellChanged?.invoke(currentRing, currentSegment)
         }
-    }
-
-    /** Clears [onCellChanged] bookkeeping; next populated cell re-signals. */
-    private fun resetSignaledCell() {
-        signaledRing = Ring.NONE
-        signaledSegment = -1
     }
 
     private var currentEventTime: Long = 0L
