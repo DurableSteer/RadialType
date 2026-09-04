@@ -23,6 +23,42 @@
             android:title="Haptic feedback"
             android:summary="Master switch for all vibration pulses"
             android:defaultValue="true" />
+            
+        <SeekBarPreference
+            android:key="haptic_intensity"
+            android:title="Haptic intensity"
+            android:summary="Overall strength of every pulse"
+            android:defaultValue="160"
+            app:min="20"
+            android:max="255"
+            app:showSeekBarValue="true"
+            android:dependency="haptic_feedback" />
+
+        <ListPreference
+            android:key="haptic_style"
+            android:title="Haptic style"
+            android:summary="Custom pulses, or crisp system effects where supported"
+            android:entries="@array/haptic_style_names"
+            android:entryValues="@array/haptic_style_values"
+            android:defaultValue="legacy"
+            android:dependency="haptic_feedback" />
+
+        <SeekBarPreference
+            android:key="haptic_tick_intensity"
+            android:title="Delete tick strength"
+            android:summary="Strength of each delete-selection tick (18 ms fixed)"
+            android:defaultValue="96"
+            app:min="10"
+            android:max="255"
+            app:showSeekBarValue="true"
+            android:dependency="haptic_feedback" />
+
+        <SwitchPreferenceCompat
+            android:key="haptic_progressive_ticks"
+            android:title="Progressive delete ticks"
+            android:summary="Each successive tick in one drag gets slightly stronger"
+            android:defaultValue="false"
+            android:dependency="haptic_feedback" />
 
         <SwitchPreferenceCompat
             android:key="haptic_deadzone_exit"
@@ -46,6 +82,20 @@
             android:dependency="haptic_feedback" />
         
         <SwitchPreferenceCompat
+            android:key="haptic_label_touch"
+            android:title="Tick on cell entry"
+            android:summary="Brief tick whenever the finger lands on a populated cell"
+            android:defaultValue="true"
+            android:dependency="haptic_feedback" />
+
+        <SwitchPreferenceCompat
+            android:key="haptic_ring_cross"
+            android:title="Click on ring crossing"
+            android:summary="Light click when dragging between the inner and outer ring"
+            android:defaultValue="true"
+            android:dependency="haptic_feedback" />
+        
+        <SwitchPreferenceCompat
             android:key="haptic_delete_tick"
             android:title="Delete selection tick"
             android:summary="Brief pulse each time the delete arm passes a character"
@@ -64,7 +114,7 @@
             android:key="dwell_duration"
             android:title="Dwell duration (ms)"
             android:summary="How long the finger must rest before the secondary syllable menu opens"
-            android:defaultValue="75"
+            android:defaultValue="50"
             app:min="1"
             android:max="800"
             app:showSeekBarValue="true" />
@@ -138,12 +188,12 @@
             app:showSeekBarValue="true" />
     </PreferenceCategory>
 
-    <PreferenceCategory android:title="Delete gesture">
+    <PreferenceCategory android:title="Delete and Cursor">
         <SeekBarPreference
             android:key="double_tap_deadzone"
             android:title="Double-tap window (ms)"
             android:summary="Max interval between deadzone taps that triggers delete mode"
-            android:defaultValue="120"
+            android:defaultValue="150"
             app:min="100"
             android:max="600"
             app:showSeekBarValue="true" />
@@ -152,10 +202,47 @@
             android:key="delete_chars_per_mm"
             android:title="Characters per mm (delete)"
             android:summary="How many characters are selected per millimetre of horizontal swipe (0.1 – 10.0)"
-            android:defaultValue="3"
+            android:defaultValue="5"
             app:min="1"
             android:max="100"
             app:showSeekBarValue="true" />
+            
+        <SeekBarPreference
+            android:key="mode_lock_grace"
+            android:title="Menu settle delay (ms)"
+            android:summary="After flicking to numbers/symbols, the menu follows the finger and ignores selection for this long"
+            android:defaultValue="120"
+            app:min="0"
+            android:max="300"
+            app:showSeekBarValue="true" />
+            
+        <SeekBarPreference
+            android:key="cursor_sens_h"
+            android:title="Cursor columns per mm"
+            android:summary="Horizontal cursor speed (0.1 – 10.0)"
+            android:defaultValue="20"
+            app:min="1" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="cursor_sens_v"
+            android:title="Cursor lines per cm"
+            android:summary="Vertical cursor speed (1 = one row per cm)"
+            android:defaultValue="10"
+            app:min="1" android:max="100" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="cursor_deadzone_radius"
+            android:title="Cursor deadzone (dp)"
+            android:summary="Neutral radius around the entry point before cursor movement begins"
+            android:defaultValue="20"
+            app:min="2" android:max="40" app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="delete_deadzone"
+            android:title="Delete arm distance (dp)"
+            android:summary="Travel required before the delete selection begins"
+            android:defaultValue="6"
+            app:min="2" android:max="40" app:showSeekBarValue="true" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Advanced — Ring geometry">
@@ -172,7 +259,7 @@
             android:key="inner_ring_radius"
             android:title="Inner ring outer edge (dp)"
             android:summary="Outside radius of the inner row — lowering it squishes the inner ring"
-            android:defaultValue="70"
+            android:defaultValue="50"
             app:min="30"
             android:max="100"
             app:showSeekBarValue="true" />
@@ -181,7 +268,7 @@
             android:key="outer_ring_radius"
             android:title="Outer ring outer edge (dp)"
             android:summary="Outermost radius of the menu — lowering it squishes the outer row"
-            android:defaultValue="115"
+            android:defaultValue="80"
             app:min="60"
             android:max="200"
             app:showSeekBarValue="true" />

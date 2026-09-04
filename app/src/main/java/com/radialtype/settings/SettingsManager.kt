@@ -14,15 +14,27 @@ object SettingsManager {
     // ── Preference keys (must match res/xml/preferences.xml) ─────
     const val KEY_DEBUG_MODE = "debug_mode"
     const val KEY_HAPTICS = "haptic_feedback"
+    const val KEY_HAPTIC_STYLE = "haptic_style"
+    const val KEY_HAPTIC_INTENSITY = "haptic_intensity"
+    const val KEY_HAPTIC_TICK_INTENSITY = "haptic_tick_intensity"
+    const val KEY_HAPTIC_PROGRESSIVE = "haptic_progressive_ticks"
+    const val KEY_HAPTIC_PROGRESSIVE_DELETE = "haptic_progressive_delete"
     const val KEY_HAPTIC_DEADZONE_EXIT = "haptic_deadzone_exit"
     const val KEY_HAPTIC_SECONDARY_ENTER = "haptic_secondary_enter"
     const val KEY_HAPTIC_SECONDARY_RING_OUT = "haptic_secondary_ring_out"
+    const val KEY_HAPTIC_LABEL_TOUCH = "haptic_label_touch"
+    const val KEY_HAPTIC_RING_CROSS = "haptic_ring_cross"
     const val KEY_HAPTIC_DELETE_TICK = "haptic_delete_tick"
     const val KEY_DWELL_DURATION = "dwell_duration"
     const val KEY_VIBRATION_LENGTH = "vibration_length"
     const val KEY_DOUBLE_TAP_DEADZONE = "double_tap_deadzone"
     const val KEY_DEADZONE_RADIUS = "deadzone_radius"
     const val KEY_DELETE_RATE = "delete_chars_per_mm"
+    const val KEY_CURSOR_SENS_H = "cursor_sensitivity_h"
+    const val KEY_CURSOR_SENS_V = "cursor_sensitivity_v"
+    const val KEY_CURSOR_DEADZONE = "cursor_deadzone_radius"
+    const val KEY_DELETE_DEADZONE = "delete_deadzone_radius"
+    const val KEY_MODE_LOCK_GRACE = "mode_lock_grace"
     const val KEY_AUTO_SPACE = "auto_space"
     const val KEY_AUTO_CAPITALIZATION = "auto_capitalization"
     const val KEY_INNER_RING_RADIUS = "inner_ring_radius"
@@ -37,9 +49,6 @@ object SettingsManager {
     const val KEY_FLOATING_FONT = "floating_font_size"
     const val KEY_MENU_FONT = "menu_font_size"
     const val KEY_SUPPRESSION_WINDOW = "suppression_window"
-    
-
-    //   language packs
     const val KEY_LANGUAGE_PRIMARY = "language_primary"
     const val KEY_LANGUAGE_SECONDARY = "language_secondary"
     const val KEY_LANGUAGE_MIX_RATIO = "language_mix_ratio"
@@ -48,28 +57,59 @@ object SettingsManager {
     // ── Bounds & defaults ────────────────────────────────────────
     const val DWELL_MIN = 1
     const val DWELL_MAX = 800
-    const val DWELL_DEFAULT = 75
+    const val DWELL_DEFAULT = 50
 
     const val VIBRATION_MIN = 1
     const val VIBRATION_MAX = 150
     const val VIBRATION_DEFAULT = 10
+    
+    // Intensity (raw actuator amplitude, 1–255).
+    const val HAPTIC_INTENSITY_MIN = 20
+    const val HAPTIC_INTENSITY_MAX = 255
+    const val HAPTIC_INTENSITY_DEFAULT = 160
+
+    // Delete tick intensity — defaults below the ring-pulse level so the
+    // ratchet stays lighter than navigation pulses.
+    const val TICK_INTENSITY_MIN = 10
+    const val TICK_INTENSITY_MAX = 255
+    const val TICK_INTENSITY_DEFAULT = 96
+
+    // Haptic style: "legacy" = custom one-shots, "click"/"heavy_click" =
+    // system predefined effects (SDK 29+, graceful fallback below).
+    const val HAPTIC_STYLE_LEGACY = "legacy"
+    const val HAPTIC_STYLE_CLICK = "system_click"
+    const val HAPTIC_STYLE_HEAVY = "system_heavy"
+    const val HAPTIC_STYLE_DEFAULT = HAPTIC_STYLE_LEGACY
 
     const val DOUBLE_TAP_MIN = 100
     const val DOUBLE_TAP_MAX = 600
-    const val DOUBLE_TAP_DEFAULT = 120
+    const val DOUBLE_TAP_DEFAULT = 150
 
     // Stored in tenths: slider 1..100 → 0.1..10.0 chars/mm.
     const val DELETE_RATE_MIN = 1
     const val DELETE_RATE_MAX = 100
-    const val DELETE_RATE_DEFAULT = 3
+    const val DELETE_RATE_DEFAULT = 5
+    
+    const val CURSOR_SENS_MIN = 1    // tenths: 0.1
+    const val CURSOR_SENS_MAX = 100  // tenths: 10.0
+    const val CURSOR_SENS_H_DEFAULT = 20   // 2.0 columns/mm
+    const val CURSOR_SENS_V_DEFAULT = 10   // 1.0 lines per ... see below
+    
+    const val CURSOR_DEADZONE_MIN = 2
+    const val CURSOR_DEADZONE_MAX = 40
+    const val CURSOR_DEADZONE_DEFAULT = 12
+
+    const val MODE_GRACE_MIN = 0
+    const val MODE_GRACE_MAX = 300
+    const val MODE_GRACE_DEFAULT = 120
 
     const val INNER_RING_MIN = 40f
     const val INNER_RING_MAX = 140f
-    const val INNER_RING_DEFAULT = 70f
+    const val INNER_RING_DEFAULT = 50f
 
     const val OUTER_RING_MIN = 80f
     const val OUTER_RING_MAX = 240f
-    const val OUTER_RING_DEFAULT = 115f
+    const val OUTER_RING_DEFAULT = 80f
 
     const val DEADZONE_MIN = 10f
     const val DEADZONE_MAX = 60f
@@ -131,6 +171,33 @@ object SettingsManager {
     var hapticsEnabled: Boolean
         get() = prefs?.getBoolean(KEY_HAPTICS, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTICS, value) }
+        
+    /** Master intensity for all custom pulses (actuator amplitude 20–255). */
+    var hapticIntensity: Int
+        get() = clamp(prefs?.getInt(KEY_HAPTIC_INTENSITY, HAPTIC_INTENSITY_DEFAULT)
+            ?: HAPTIC_INTENSITY_DEFAULT, HAPTIC_INTENSITY_MIN, HAPTIC_INTENSITY_MAX)
+        set(value) = put {
+            it.putInt(KEY_HAPTIC_INTENSITY, clamp(value, HAPTIC_INTENSITY_MIN, HAPTIC_INTENSITY_MAX))
+        }
+
+    /** Delete-tick amplitude override (actuator amplitude 10–255). */
+    var hapticTickIntensity: Int
+        get() = clamp(prefs?.getInt(KEY_HAPTIC_TICK_INTENSITY, TICK_INTENSITY_DEFAULT)
+            ?: TICK_INTENSITY_DEFAULT, TICK_INTENSITY_MIN, TICK_INTENSITY_MAX)
+        set(value) = put {
+            it.putInt(KEY_HAPTIC_TICK_INTENSITY, clamp(value, TICK_INTENSITY_MIN, TICK_INTENSITY_MAX))
+        }
+
+    /** One of HAPTIC_STYLE_* — how ring/tick pulses are rendered. */
+    var hapticStyle: String
+        get() = prefs?.getString(KEY_HAPTIC_STYLE, HAPTIC_STYLE_CLICK)
+            ?: HAPTIC_STYLE_CLICK
+        set(value) = put { it.putString(KEY_HAPTIC_STYLE, value) }
+
+    /** Rising-amplitude delete ticks (crescendo within one gesture). */
+    var hapticProgressiveTicks: Boolean
+        get() = prefs?.getBoolean(KEY_HAPTIC_PROGRESSIVE, false) ?: false
+        set(value) = put { it.putBoolean(KEY_HAPTIC_PROGRESSIVE, value) }
 
     var hapticDeadzoneExit: Boolean
         get() = prefs?.getBoolean(KEY_HAPTIC_DEADZONE_EXIT, false) ?: false
@@ -145,6 +212,16 @@ object SettingsManager {
     var hapticSecondaryRingOut: Boolean
         get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, value) }
+    
+    /** Tick when the finger lands on a cell that has a label. */
+    var hapticLabelTouch: Boolean
+        get() = prefs?.getBoolean(KEY_HAPTIC_LABEL_TOUCH, true) ?: true
+        set(value) = put { it.putBoolean(KEY_HAPTIC_LABEL_TOUCH, value) }
+
+    /** Light click on crossing between the inner and outer ring. */
+    var hapticRingCross: Boolean
+        get() = prefs?.getBoolean(KEY_HAPTIC_RING_CROSS, true) ?: true
+        set(value) = put { it.putBoolean(KEY_HAPTIC_RING_CROSS, value) }
     
     /** Sub-toggle for the delete-mode per-character tick. */
     var hapticDeleteTick: Boolean
@@ -177,6 +254,14 @@ object SettingsManager {
             ?: DOUBLE_TAP_DEFAULT, DOUBLE_TAP_MIN, DOUBLE_TAP_MAX)
         set(value) = put {
             it.putInt(KEY_DOUBLE_TAP_DEADZONE, clamp(value, DOUBLE_TAP_MIN, DOUBLE_TAP_MAX))
+        }
+    /** Grace window (ms) after NUMBER/SYMBOL lock during which the menu
+     *  follows the finger but accepts no selection. 0 disables. */
+    var modeLockGraceMs: Int
+        get() = clamp(prefs?.getInt(KEY_MODE_LOCK_GRACE, MODE_GRACE_DEFAULT)
+            ?: MODE_GRACE_DEFAULT, MODE_GRACE_MIN, MODE_GRACE_MAX)
+        set(value) = put {
+            it.putInt(KEY_MODE_LOCK_GRACE, clamp(value, MODE_GRACE_MIN, MODE_GRACE_MAX))
         }
     
     var floatingLabelOffsetPx: Int
@@ -237,6 +322,38 @@ object SettingsManager {
         set(value) = put {
             it.putInt(KEY_DELETE_RATE, (value * 10f).toInt()
                 .coerceIn(DELETE_RATE_MIN, DELETE_RATE_MAX))
+        }
+    
+    /** Horizontal cursor speed: columns per mm of drag (tenths, 1–100). */
+    var cursorColumnsPerMm: Float
+        get() = (prefs?.getInt(KEY_CURSOR_SENS_H, 20) ?: 20)
+            .coerceIn(1, 100) / 10f
+        set(value) = put {
+            it.putInt(KEY_CURSOR_SENS_H, (value * 10f).toInt().coerceIn(1, 100))
+        }
+
+    /** Vertical cursor speed: lines per cm of drag (tenths, 1–100). */
+    var cursorLinesPerCm: Float
+        get() = (prefs?.getInt(KEY_CURSOR_SENS_V, 10) ?: 10)
+            .coerceIn(1, 100) / 10f
+        set(value) = put {
+            it.putInt(KEY_CURSOR_SENS_V, (value * 10f).toInt().coerceIn(1, 100))
+        }
+
+    /** Neutral radius (dp) around the entry point before cursor movement begins. */
+    var cursorDeadzoneDp: Float
+        get() = (prefs?.getInt(KEY_CURSOR_DEADZONE, 12) ?: 12)
+            .coerceIn(2, 40).toFloat()
+        set(value) = put {
+            it.putInt(KEY_CURSOR_DEADZONE, value.toInt().coerceIn(2, 40))
+        }
+
+    /** Travel (dp) before the delete selection first arms. */
+    var deleteDeadzoneDp: Float
+        get() = (prefs?.getInt(KEY_DELETE_DEADZONE, 6) ?: 6)
+            .coerceIn(2, 40).toFloat()
+        set(value) = put {
+            it.putInt(KEY_DELETE_DEADZONE, value.toInt().coerceIn(2, 40))
         }
 
     /** Radius of the centre deadzone (dp) — ring NONE. Independent of inner ring. */

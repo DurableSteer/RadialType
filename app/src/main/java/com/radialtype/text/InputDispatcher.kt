@@ -106,16 +106,70 @@ class InputDispatcher(
         if (end >= start) ic.setSelection(start, end)
     }
 
-    /** Clears the preview selection state without deleting. */
+    /** Restores the cursor to the pre-gesture position and clears preview state. */
     fun cancelDeletePreview() {
+        val base = previewBaseCursor
+        if (base != null) {
+            connectionProvider()?.setSelection(base, base)
+        }
         previewBaseCursor = null
+    }
+    
+    /**
+     * Moves the cursor by [columns] characters (negative = left) via
+     * synthetic DPAD events. Editors translate these natively, including
+     * across line boundaries in multiline fields.
+     */
+    fun moveCursorHorizontally(columns: Int) {
+        if (columns == 0) return
+        val ic = connectionProvider() ?: return
+
+        val et = ic.getExtractedText(ExtractedTextRequest(), 0)
+        val text = et?.text
+        if (et == null || text == null || et.selectionStart < 0) {
+            // Editor without extracted-text support: fall back to DPAD,
+            // accepting the focus-traversal edge case on those targets.
+            val code = if (columns < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+            repeat(Math.abs(columns)) {
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+            }
+            return
+        }
+
+        val pos = et.selectionStart
+        val target = (pos + columns).coerceIn(0, text.length)
+        if (target != pos) {
+            ic.setSelection(target, target)
+        }
+    }
+    
+    /** Moves the cursor by [lines] lines up (negative) or down. */
+    fun moveCursorVertically(lines: Int) {
+        val ic = connectionProvider() ?: return
+        val code = if (lines < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN
+        repeat(Math.abs(lines)) {
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        }
     }
 
     /**
      * Performs the deletion selected by the DELETE gesture.
      */
     fun deleteRange(left: Int, right: Int) {
-        if (left <= 0 && right <= 0) return
+        if (left <= 0 && right <= 0) {
+            // Zero-count release still ends the gesture: collapse any
+            // preview selection back to the cached base and clear the
+            // cache, or the NEXT delete gesture inherits this gesture's
+            // cursor position and its selections slip left.
+            val base = previewBaseCursor
+            if (base != null) {
+                connectionProvider()?.setSelection(base, base)
+            }
+            previewBaseCursor = null
+            return
+        }
         val ic = connectionProvider() ?: return
         val base = previewBaseCursor
 
@@ -137,7 +191,7 @@ class InputDispatcher(
         ic.deleteSurroundingText(left, right)
         previewBaseCursor = null
     }
-
+    
     /** Sends a synthetic hardware key event (down + up). */
     fun sendKey(keyCode: Int) {
         val ic = connectionProvider() ?: return

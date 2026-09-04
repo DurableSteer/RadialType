@@ -51,6 +51,12 @@ class RadialKeyboardView(
 
     var onRenderFrame: ((RadialRenderData) -> Unit)? = null
     var inputDispatcher: InputDispatcher? = null
+    // ── Cursor-mode delta bridging ────────────────────────────────
+    // Shadow copies of the FSM's absolute cursor counts; each callback
+    // translates "current count" into "delta since last applied" for
+    // the InputDispatcher's relative DPAD events.
+    private var lastCursorCols = 0
+    private var lastCursorLines = 0
 
     val haptics = HapticController(context)
 
@@ -156,6 +162,10 @@ class RadialKeyboardView(
             if (lastHapticState == TouchState.PRIMARY && newState == TouchState.SECONDARY) {
                 haptics.pulseSecondaryEnter()
             }
+            if (newState == TouchState.CURSOR) {
+                lastCursorCols = 0
+                lastCursorLines = 0
+            }
             lastHapticState = newState
 
             selectionTracker.mode = activeMode   // unqualified: apply-block receiver
@@ -179,37 +189,85 @@ class RadialKeyboardView(
                 CharacterMap.TOKEN_LEFT  -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_LEFT)
                 CharacterMap.TOKEN_RIGHT -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_RIGHT)
                 CharacterMap.TOKEN_UP    -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_UP)
-                CharacterMap.TOKEN_DOWN  -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_DOWN)
+                CharacterMap.TOKEN_DOWN   -> inputDispatcher?.sendKey(KeyEvent.KEYCODE_DPAD_DOWN)
             }
             if (label.isNotEmpty() && !characterMap.isFunctionKey(label)) {
                 inputDispatcher?.commit(label)
             }
         }
-        onRingChanged = { ring ->
-            if (VERBOSE_LOG) Log.d(TAG, "Ring changed -> $ring (prev=$previousRing)")
+        onRingChanged = { newRing ->
+            // Inside this .apply{} the FSM under construction is the receiver:
+            // `previousRing` and `state` are its live fields, already updated
+            // (previousRing = old ring) BEFORE this callback runs. Never qualify
+            // them with `touchStateMachine.` here — the property is still being
+            // initialized.
+            if (VERBOSE_LOG) Log.d(TAG, "Ring changed -> $newRing (prev=$previousRing)")
 
-            // Deadzone exit: NONE → any ring, fires on both PRIMARY and SECONDARY.
-            if (previousRing == GeometryEngine.Ring.NONE && ring != GeometryEngine.Ring.NONE) {
+            val oldRing = previousRing
+
+            // Deadzone exit: NONE → any ring
+            if (oldRing == GeometryEngine.Ring.NONE && newRing != GeometryEngine.Ring.NONE) {
                 haptics.pulseDeadzoneExit()
             }
 
-            // Secondary inner → outer ring transition.
+            // Secondary inner → outer ring transition
             if (state == TouchState.SECONDARY &&
-                previousRing == GeometryEngine.Ring.INNER &&
-                ring == GeometryEngine.Ring.OUTER
+                oldRing == GeometryEngine.Ring.INNER &&
+                newRing == GeometryEngine.Ring.OUTER
             ) {
                 haptics.pulseSecondaryRingOut()
+            }
+
+            // Ring-to-ring crossing (PRIMARY, NUMBER, SYMBOL): fires both
+            // directions — inner→outer and outer→inner. Excluded in SECONDARY
+            // where pulseSecondaryRingOut owns the radial transition.
+            if (state != TouchState.SECONDARY &&
+                oldRing != GeometryEngine.Ring.NONE &&
+                newRing != GeometryEngine.Ring.NONE
+            ) {
+                haptics.pulseRingCross()
             }
         }
         onSegmentChanged = { segment ->
             if (VERBOSE_LOG) Log.d(TAG, "Segment changed -> $segment")
             selectionTracker.update(currentRing, currentSegment)
+            // NOTE: the "tick on cell entry" haptic used to live here, driven
+            // off characterMap.getPrimaryChar(...). That was doubly wrong:
+            // (a) it never fired for radial inner↔outer crossings where the
+            // segment index is unchanged, and (b) on the SECONDARY menu it
+            // consulted the primary layout table instead of the syllable
+            // provider. Both cases are now handled by onCellChanged below.
+        }
+        onCellChanged = { ring, segment ->
+            // Fires for EVERY newly-entered (ring, segment) cell, including
+            // deadzone→inner, inner→outer and outer→inner crossings at the
+            // same segment index, and re-entry after a deadzone visit.
+            val label = if (state == TouchState.SECONDARY) {
+                // Secondary menus are labelled by the syllable provider,
+                // keyed on the dwelled primary character — NOT by the
+                // primary ring layout. selectionTracker.currentPrimaryChar
+                // is stable for the whole SECONDARY gesture (set at dwell
+                // time), so reading it here is safe.
+                syllableProvider.getSyllable(
+                    selectionTracker.currentPrimaryChar, ring, segment
+                )
+            } else {
+                characterMap.getPrimaryChar(ring, segment, activeMode)
+            }
+            if (VERBOSE_LOG) {
+                Log.d(TAG, "Cell entry -> ring=$ring seg=$segment label='$label'")
+            }
+            if (label.isNotEmpty()) {
+                haptics.pulseLabelTouch()
+            }
         }
 
         onDeleteProgress = { left, right ->
             if (VERBOSE_LOG) Log.d(TAG, "Delete progress: -$left +$right")
             if (left > 0 || right > 0) {
                 haptics.pulseDeleteTick()
+            } else {
+                haptics.resetDeleteTicks()   // selection collapsed → crescendo restarts
             }
             inputDispatcher?.previewDeleteRange(left, right)
             pushFrame()
@@ -222,6 +280,18 @@ class RadialKeyboardView(
         onDeleteCancelled = {
             if (VERBOSE_LOG) Log.d(TAG, "Delete cancelled")
             inputDispatcher?.cancelDeletePreview()
+            pushFrame()
+        }
+        onCursorMoveH = { cols ->
+            val delta = cols - lastCursorCols
+            lastCursorCols = cols
+            if (delta != 0) inputDispatcher?.moveCursorHorizontally(delta)
+            pushFrame()
+        }
+        onCursorMoveV = { lines ->
+            val delta = lines - lastCursorLines
+            lastCursorLines = lines
+            if (delta != 0) inputDispatcher?.moveCursorVertically(delta)
             pushFrame()
         }
     }
@@ -278,6 +348,8 @@ class RadialKeyboardView(
                 labelY = touchStateMachine.currentY + screenOffsetY + leadY,
                 deleteLeftCount = touchStateMachine.deleteLeftCount,
                 deleteRightCount = touchStateMachine.deleteRightCount,
+                cursorDx = touchStateMachine.cursorColumns,
+                cursorDy = touchStateMachine.cursorLines,
                 mode = touchStateMachine.activeMode
             )
         )

@@ -29,7 +29,7 @@ enum class LayoutMode { LETTERS, NUMBERS, SYMBOLS }
  * Any gesture ending with ring NONE arms the detector. A following DOWN
  * within the configured window enters AXIS_PENDING; the FIRST move past
  * the arm threshold decides the gesture's axis, which then locks:
- * - horizontal (|dx| >= |dy|) → DELETE
+ * - horizontal (|dx| >= |dy|) → DELETE (left) or CURSOR (right)
  * - upward  (dy < 0)          → NUMBER mode
  * - downward (dy > 0)         → SYMBOL mode
  *
@@ -42,6 +42,13 @@ enum class LayoutMode { LETTERS, NUMBERS, SYMBOLS }
  * the second tap), except the dwell timer is never allowed to open a
  * secondary menu — the label comes straight from the mode's layout and
  * commits on release. Layout source: CharacterMap.ringsFor(activeMode).
+ *
+ * ── Cell-entry signalling ───────────────────────────────────────
+ * [onCellChanged] fires for every distinct (ring, segment) cell the
+ * finger enters, INCLUDING radial ring crossings where the segment
+ * index is unchanged (inner → outer / outer → inner along the same
+ * ray) and re-entry after a deadzone visit. This complements
+ * [onSegmentChanged], which cannot see ring crossings.
  */
 class TouchStateMachine(
     private val geometryEngine: GeometryEngine = GeometryEngine(),
@@ -75,9 +82,21 @@ class TouchStateMachine(
 
         /**
          * Travel (dp, dominant axis) required after the double-tap DOWN
-         * before the gesture axis (delete/number/symbol) locks in.
+         * before the gesture axis (delete/cursor/number/symbol) locks in.
          */
         const val AXIS_ARM_THRESHOLD_DP = 6f
+
+        /** Default post-lock menu grace window (ms) — matches settings default. */
+        const val MODE_GRACE_DEFAULT = 80
+
+        /** Fallback cursor-mode deadzone radius (dp). */
+        const val CURSOR_DEADZONE_DEFAULT = 12f     // dp — note the f
+
+        /** Fallback cursor horizontal speed (tenths: 2.0 columns/mm). */
+        const val CURSOR_COLS_PER_MM_DEFAULT = 20
+
+        /** Fallback cursor vertical speed (tenths: 1.0 line/cm). */
+        const val CURSOR_LINES_PER_CM_DEFAULT = 10
     }
 
     val dwellTimer: DwellTimer = dwellTimerOverride
@@ -133,6 +152,27 @@ class TouchStateMachine(
         private set
 
     // ── Delete gesture state ─────────────────────────────────────
+    
+    /**
+     * Grace period after the gateway locks NUMBER/SYMBOL mode: while active,
+     * the menu continuously re-anchors to the finger (selection impossible —
+     * the finger is always at its own anchor) and freezes when the window
+     * expires. Set in enterModeLocked, read in handleModeMove.
+     */
+    private var modeGraceActive = false
+    private var modeGraceDeadline: Long = 0L
+
+    private fun modeGraceMs(): Int =
+        if (SettingsManager.isInitialized) SettingsManager.modeLockGraceMs
+        else MODE_GRACE_DEFAULT
+        
+    private fun cursorColumnsPerMm(): Float =
+        if (SettingsManager.isInitialized) SettingsManager.cursorColumnsPerMm
+        else CURSOR_COLS_PER_MM_DEFAULT / 10f
+
+    private fun cursorLinesPerCm(): Float =
+        if (SettingsManager.isInitialized) SettingsManager.cursorLinesPerCm
+        else CURSOR_LINES_PER_CM_DEFAULT / 10f
 
     /** Characters currently selected LEFT of the cursor (pending delete). */
     var deleteLeftCount: Int = 0
@@ -155,6 +195,31 @@ class TouchStateMachine(
     var onCommit: (() -> Unit)? = null
     var onRingChanged: ((Ring) -> Unit)? = null
     var onSegmentChanged: ((Int) -> Unit)? = null
+
+    /**
+     * Fired whenever the finger enters a DIFFERENT (ring, segment) cell
+     * than the last one signaled — including:
+     * - deadzone → populated cell,
+     * - inner cell → outer cell at the SAME segment index (radial
+     *   crossing, invisible to [onSegmentChanged]),
+     * - outer cell → inner cell at the same segment index,
+     * - re-entry of a previously visited cell after a deadzone visit.
+     *
+     * Never fires while the finger is in the deadzone (ring NONE).
+     * Consumers resolve their own label for (ring, segment) and decide
+     * whether the cell is populated (e.g. the "tick on cell entry"
+     * haptic).
+     */
+    var onCellChanged: ((Ring, Int) -> Unit)? = null
+
+    /** Last cell passed to [onCellChanged]; NONE/-1 = nothing signaled. */
+    private var signaledRing: Ring = Ring.NONE
+    private var signaledSegment: Int = -1
+
+    /** Fired during CURSOR drags: signed column displacement from anchor. */
+    var onCursorMoveH: ((Int) -> Unit)? = null
+    /** Fired during CURSOR drags: signed line displacement (negative = up). */
+    var onCursorMoveV: ((Int) -> Unit)? = null
 
     /** Fired on every drag in DELETE: (charsLeft, charsRight). */
     var onDeleteProgress: ((left: Int, right: Int) -> Unit)? = null
@@ -208,6 +273,11 @@ class TouchStateMachine(
         secondaryAnchorY = 0f
         lastUpTimestamp = 0L
         lastUpInDeadzone = false
+        modeGraceActive = false
+        modeGraceDeadline = 0L
+        cursorColumns = 0
+        cursorLines = 0
+        resetSignaledCell()
         transitionTo(TouchState.IDLE)
     }
 
@@ -253,9 +323,16 @@ class TouchStateMachine(
             Log.d(TAG, "enterSecondary() suppressed — finger in deadzone (ring=NONE)")
             return
         }
+        if (currentSegment < 0) {
+            Log.d(TAG, "enterSecondary() suppressed — no segment resolved yet")
+            return
+        }
         secondaryAnchorX = currentX
         secondaryAnchorY = currentY
         lastRingChangeTime = 0L
+        // Fresh menu, fresh anchors: every cell the finger enters from
+        // here on is "new" as far as onCellChanged is concerned.
+        resetSignaledCell()
         transitionTo(TouchState.SECONDARY)
     }
 
@@ -269,6 +346,7 @@ class TouchStateMachine(
         deleteRightCount = 0
         lastRingChangeTime = 0L
         activeMode = LayoutMode.LETTERS
+        resetSignaledCell()
         transitionTo(TouchState.DELETE)
     }
 
@@ -283,6 +361,12 @@ class TouchStateMachine(
         deleteRightCount = 0
         lastRingChangeTime = 0L
         activeMode = mode
+        resetSignaledCell()
+
+        val grace = modeGraceMs()
+        modeGraceActive = grace > 0
+        modeGraceDeadline = currentEventTime + grace
+
         transitionTo(
             if (mode == LayoutMode.NUMBERS) TouchState.NUMBER else TouchState.SYMBOL
         )
@@ -316,6 +400,7 @@ class TouchStateMachine(
             deleteLeftCount = 0
             deleteRightCount = 0
             lastRingChangeTime = 0L
+            resetSignaledCell()
             transitionTo(TouchState.AXIS_PENDING)
             return true
         }
@@ -331,6 +416,7 @@ class TouchStateMachine(
         previousSegment = -1
         lastRingChangeTime = 0L
         activeMode = LayoutMode.LETTERS
+        resetSignaledCell()
 
         transitionTo(TouchState.PRIMARY)
         return true
@@ -345,14 +431,36 @@ class TouchStateMachine(
             TouchState.PRIMARY      -> handlePrimaryMove()
             TouchState.SECONDARY    -> handleSecondaryMove()
             TouchState.DELETE       -> handleDeleteMove(event, pointerIndex)
+            TouchState.CURSOR       -> handleCursorMove(event, pointerIndex)
             TouchState.AXIS_PENDING -> handleAxisPendingMove(event, pointerIndex)
             TouchState.NUMBER,
-            TouchState.SYMBOL       -> resolveGeometry(anchorX, anchorY)
+            TouchState.SYMBOL       -> handleModeMove()
             TouchState.IDLE         -> { /* spurious MOVE with no DOWN — ignore */ }
         }
 
         onPositionChanged?.invoke()
         return true
+    }
+    
+    /**
+     * NUMBER/SYMBOL move handling with the post-lock grace window.
+     * While grace is active the anchor tracks the finger — the menu follows
+     * the flick and nothing can be selected (finger ≡ anchor → deadzone).
+     * On the first MOVE after the deadline the anchor freezes and normal
+     * geometry resolution resumes. Grace = 0 skips the window entirely.
+     */
+    private fun handleModeMove() {
+        if (!modeGraceActive) {
+            resolveGeometry(anchorX, anchorY)
+            return
+        }
+        if (currentEventTime >= modeGraceDeadline) {
+            modeGraceActive = false
+            resolveGeometry(anchorX, anchorY)   // freeze happened earlier; resolve now
+            return
+        }
+        anchorX = currentX
+        anchorY = currentY
     }
 
     private fun handleUp(event: MotionEvent): Boolean {
@@ -369,10 +477,28 @@ class TouchStateMachine(
             onDeleteCommit?.invoke(left, right)
             return true
         }
+        
+        // in handleUp, alongside the AXIS_PENDING branch:
+        if (state == TouchState.CURSOR) {
+            lastUpTimestamp = SystemClock.uptimeMillis()
+            lastUpInDeadzone = false   // deliberately do NOT re-arm the gateway
+            transitionTo(TouchState.IDLE)
+            return true
+        }
 
         // Gateway released before any axis lock: a deadzone-end that
         // keeps the detector armed for another tap, but commits nothing.
         if (state == TouchState.AXIS_PENDING) {
+            lastUpTimestamp = SystemClock.uptimeMillis()
+            lastUpInDeadzone = true
+            transitionTo(TouchState.IDLE)
+            return true
+        }
+        
+        // Lifted inside the post-lock grace window: nothing was ever selected,
+        // so nothing commits. Counts as a deadzone-end for the gateway.
+        if ((state == TouchState.NUMBER || state == TouchState.SYMBOL) && modeGraceActive) {
+            modeGraceActive = false
             lastUpTimestamp = SystemClock.uptimeMillis()
             lastUpInDeadzone = true
             transitionTo(TouchState.IDLE)
@@ -406,6 +532,12 @@ class TouchStateMachine(
             onDeleteCancelled?.invoke()
             return true
         }
+        if (state == TouchState.CURSOR) {
+            cursorColumns = 0
+            cursorLines = 0
+            transitionTo(TouchState.IDLE)
+            return true
+        }
         currentX = anchorX
         currentY = anchorY
         transitionTo(TouchState.IDLE)
@@ -416,30 +548,42 @@ class TouchStateMachine(
 
     /**
      * First significant move after the gateway DOWN locks the gesture:
-     * horizontal → DELETE, upward → NUMBER, downward → SYMBOL. Once
-     * locked, this same move is processed immediately so the gesture
-     * loses no stroke.
+     * left-horizontal → DELETE, right-horizontal → CURSOR, upward →
+     * NUMBER, downward → SYMBOL. Once locked, this same move is processed
+     * immediately so the gesture loses no stroke.
      */
     private fun handleAxisPendingMove(event: MotionEvent, pointerIndex: Int) {
         val dxDp = GeometryEngine.pxToDp(event.getX(pointerIndex) - anchorX, density)
         val dyDp = GeometryEngine.pxToDp(event.getY(pointerIndex) - anchorY, density)
-
         val axDp = Math.abs(dxDp)
         val ayDp = Math.abs(dyDp)
         if (axDp < AXIS_ARM_THRESHOLD_DP && ayDp < AXIS_ARM_THRESHOLD_DP) return
 
-        if (axDp >= ayDp) {
-            Log.d(TAG, "Gateway lock: horizontal → DELETE")
-            startDelete()
-            handleDeleteMove(event, pointerIndex)   // ← was handleDeleteMove(event)
-        } else if (dyDp < 0f) {
-            Log.d(TAG, "Gateway lock: upward → NUMBER mode")
-            enterModeLocked(LayoutMode.NUMBERS)
-            resolveGeometry(anchorX, anchorY)
-        } else {
-            Log.d(TAG, "Gateway lock: downward → SYMBOL mode")
-            enterModeLocked(LayoutMode.SYMBOLS)
-            resolveGeometry(anchorX, anchorY)
+        when {
+            dxDp < 0f && axDp >= ayDp -> {
+                Log.d(TAG, "Gateway lock: left → DELETE")
+                startDelete()
+                reanchorToCurrentPosition()
+                handleDeleteMove(event, pointerIndex)
+            }
+            dxDp > 0f && axDp >= ayDp -> {
+                Log.d(TAG, "Gateway lock: right → CURSOR mode")
+                startCursor()
+                reanchorToCurrentPosition()
+                handleCursorMove(event, pointerIndex)
+            }
+            dyDp < 0f -> {
+                Log.d(TAG, "Gateway lock: upward → NUMBER mode")
+                enterModeLocked(LayoutMode.NUMBERS)
+                reanchorToCurrentPosition()
+                resolveGeometry(anchorX, anchorY)
+            }
+            else -> {
+                Log.d(TAG, "Gateway lock: downward → SYMBOL mode")
+                enterModeLocked(LayoutMode.SYMBOLS)
+                reanchorToCurrentPosition()
+                resolveGeometry(anchorX, anchorY)
+            }
         }
     }
 
@@ -456,7 +600,7 @@ class TouchStateMachine(
         // so lift-off jitter around the neutral zone can't flip a
         // deliberate 1-character delete into a no-op (or vice versa).
         if (!selectionActive) {
-            if (axDp < DELETE_ARM_THRESHOLD_DP) return
+            if (axDp < SettingsManager.deleteDeadzoneDp) return
         } else if (axDp < DELETE_DISARM_THRESHOLD_DP) {
             deleteLeftCount = 0
             deleteRightCount = 0
@@ -489,6 +633,30 @@ class TouchStateMachine(
             onDeleteProgress?.invoke(deleteLeftCount, deleteRightCount)
         }
     }
+    
+    // Cursor feature.
+    
+    /** Signed column displacement applied so far in CURSOR mode. */
+    var cursorColumns: Int = 0
+        private set
+
+    /** Signed line displacement applied so far (negative = up). */
+    var cursorLines: Int = 0
+        private set
+    
+    private fun startCursor() {
+        cursorColumns = 0
+        cursorLines = 0
+        dwellTimer.cancel()
+        currentRing = Ring.NONE
+        currentSegment = -1
+        previousRing = Ring.NONE
+        previousSegment = -1
+        lastRingChangeTime = 0L
+        activeMode = LayoutMode.LETTERS
+        resetSignaledCell()
+        transitionTo(TouchState.CURSOR)
+    }
 
     /**
      * Common geometry resolution for PRIMARY, SECONDARY, NUMBER and
@@ -514,9 +682,11 @@ class TouchStateMachine(
             previousRing = currentRing
             currentRing = newRing
             if (newRing == Ring.NONE) {
-                // Entering the deadzone deselects everything.
+                // Entering the deadzone deselects everything — and any
+                // cell the finger later re-enters must signal again.
                 previousSegment = currentSegment
                 currentSegment = -1
+                resetSignaledCell()
             }
             lastRingChangeTime = currentEventTime
             onRingChanged?.invoke(newRing)
@@ -530,7 +700,9 @@ class TouchStateMachine(
         // ends with no segment to commit. Hysteresis (2° angular,
         // tunable) carries jitter defense instead.
         val timeSinceRingChange = currentEventTime - lastRingChangeTime
-        val suppressed = !final && timeSinceRingChange < suppressionWindowMs()
+        val suppressed = !final &&
+              currentSegment != -1 &&
+              timeSinceRingChange < suppressionWindowMs()
 
         if (!suppressed && newRing != Ring.NONE && newSegment != currentSegment) {
             previousSegment = currentSegment
@@ -538,6 +710,31 @@ class TouchStateMachine(
             onSegmentChanged?.invoke(newSegment)
             dwellTimer.reset()
         }
+
+        // ── Cell-entry signal ─────────────────────────────────────
+        // Fires for every distinct (ring, segment) cell the finger
+        // occupies, independently of the segment-change event above.
+        // Critical difference: a radial crossing inner ↔ outer keeps
+        // the segment index constant, so onSegmentChanged never fires
+        // for it — yet the finger HAS entered a different label. The
+        // signaled-cell bookkeeping catches that case (and re-entry
+        // after a deadzone visit, cleared above). The suppression
+        // window does NOT gate this signal: a ring crossing lands the
+        // finger in a new cell by definition, and ring/segment
+        // hysteresis already absorbs jitter.
+        if (currentRing != Ring.NONE && currentSegment != -1 &&
+            (currentRing != signaledRing || currentSegment != signaledSegment)
+        ) {
+            signaledRing = currentRing
+            signaledSegment = currentSegment
+            onCellChanged?.invoke(currentRing, currentSegment)
+        }
+    }
+
+    /** Clears [onCellChanged] bookkeeping; next populated cell re-signals. */
+    private fun resetSignaledCell() {
+        signaledRing = Ring.NONE
+        signaledSegment = -1
     }
 
     private var currentEventTime: Long = 0L
@@ -548,6 +745,48 @@ class TouchStateMachine(
 
     private fun handleSecondaryMove() {
         resolveGeometry(secondaryAnchorX, secondaryAnchorY)
+    }
+    
+    /**
+     * Moves the gesture anchor to the finger's current position. Called when
+     * the gateway locks NUMBER/SYMBOL mode: the locking flick has already
+     * displaced the finger from the second tap's down position, so keeping
+     * that anchor opens the menu offset from the finger. Re-anchoring here
+     * centres the menu under the finger and drops it into the new menu's
+     * deadzone — a neutral start, identical to a fresh gesture's down — and
+     * mirrors the secondary menu's behaviour of centring on the finger.
+     */
+    private fun reanchorToCurrentPosition() {
+        anchorX = currentX
+        anchorY = currentY
+    }
+    
+    private fun handleCursorMove(event: MotionEvent, pointerIndex: Int) {
+        val dxDp = GeometryEngine.pxToDp(event.getX(pointerIndex) - anchorX, density)
+        val dyDp = GeometryEngine.pxToDp(event.getY(pointerIndex) - anchorY, density)
+        val deadDp: Float = if (SettingsManager.isInitialized) SettingsManager.cursorDeadzoneDp
+                            else CURSOR_DEADZONE_DEFAULT
+
+        val newCols = signedCount(dxDp, deadDp, DP_PER_MM / cursorColumnsPerMm())
+        if (newCols != cursorColumns) {
+            cursorColumns = newCols
+            onCursorMoveH?.invoke(newCols)
+        }
+
+        val newLines = signedCount(dyDp, deadDp, (DP_PER_MM * 10f) / cursorLinesPerCm())
+        if (newLines != cursorLines) {
+            cursorLines = newLines
+            onCursorMoveV?.invoke(newLines)
+        }
+    }
+
+    /** Steps for one axis: 0 inside the deadzone, otherwise displacement
+     *  measured past the deadzone edge, divided by the step size. */
+    private fun signedCount(dispDp: Float, deadDp: Float, stepDp: Float): Int {
+        val mag = Math.abs(dispDp)
+        if (mag <= deadDp) return 0
+        val count = ((mag - deadDp) / stepDp).toInt().coerceAtLeast(1)
+        return if (dispDp < 0f) -count else count
     }
 
     // ── Transition machinery ─────────────────────────────────────
@@ -563,6 +802,7 @@ class TouchStateMachine(
             TouchState.AXIS_PENDING -> dwellTimer.cancel()
             TouchState.SECONDARY    -> { /* dwell callback already fired */ }
             TouchState.DELETE       -> { /* timer cancelled in startDelete */ }
+            TouchState.CURSOR       -> { /* timer cancelled in startCursor */ }
             TouchState.NUMBER,
             TouchState.SYMBOL       -> { /* dwell never fires in locked modes */ }
         }
@@ -576,6 +816,7 @@ class TouchStateMachine(
         SECONDARY,
         AXIS_PENDING,
         DELETE,
+        CURSOR,
         NUMBER,
         SYMBOL
     }

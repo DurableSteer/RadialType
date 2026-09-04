@@ -38,6 +38,8 @@ class RadialRenderData(
     val labelY: Float = currentY,
     val deleteLeftCount: Int = 0,
     val deleteRightCount: Int = 0,
+    val cursorDx: Int = 0,
+    val cursorDy: Int = 0,
     val mode: com.radialtype.engine.LayoutMode = com.radialtype.engine.LayoutMode.LETTERS,
     val pushTimeMs: Long = android.os.SystemClock.uptimeMillis()
 )
@@ -188,6 +190,10 @@ class RadialRenderer(
             drawDeleteFeedback(canvas, data)
             return
         }
+        if (data.state == TouchState.CURSOR) {
+            drawCursorFeedback(canvas, data)
+            return
+        }
 
         val accent: Int
         val cx: Float
@@ -242,6 +248,31 @@ class RadialRenderer(
         val y = (data.labelY - floatingLabelOffsetPx).coerceAtLeast(floatingLabelPaint.textSize)
         drawFloatingTextWithBackdrop(canvas, text, data.labelX, y,
             floatingLabelPaint, DELETE_RED.toInt())
+    }
+    
+    private fun drawCursorFeedback(canvas: Canvas, data: RadialRenderData) {
+        if (zoneRX > 0f && zoneRY > 0f && zoneCX >= 0f) {
+            val inset = 2f
+            val r = 12f * density
+            scratchRect.set(zoneCX - zoneRX + inset, zoneCY - zoneRY + inset,
+                            zoneCX + zoneRX - inset, zoneCY + zoneRY - inset)
+            outlinePaint.color = CYAN.toInt()
+            canvas.drawRoundRect(scratchRect, r, r, outlinePaint)
+        }
+
+        drawCircleGlow(canvas, data.currentX, data.currentY, 22f * density, CYAN.toInt())
+
+        // Indicator: ◇ marks the anchor (neutral), arrows show signed steps.
+        val sb = StringBuilder("◇")
+        if (data.cursorDx != 0) sb.append("  ").append(if (data.cursorDx < 0) "←" else "→")
+            .append(Math.abs(data.cursorDx))
+        if (data.cursorDy != 0) sb.append("  ").append(if (data.cursorDy < 0) "↑" else "↓")
+            .append(Math.abs(data.cursorDy))
+        val text = sb.toString()
+
+        val y = (data.labelY - floatingLabelOffsetPx).coerceAtLeast(floatingLabelPaint.textSize)
+        drawFloatingTextWithBackdrop(canvas, text, data.labelX, y,
+            floatingLabelPaint, CYAN.toInt())
     }
 
     /** Pulls label/typography feel settings. Cheap string-free compare. */

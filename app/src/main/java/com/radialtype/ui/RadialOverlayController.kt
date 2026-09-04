@@ -2,6 +2,7 @@ package com.radialtype.ui
 
 import android.content.Context
 import android.graphics.PixelFormat
+import android.util.Log
 import android.os.IBinder
 import android.util.TypedValue
 import android.view.Gravity
@@ -93,7 +94,12 @@ class RadialOverlayController(
 
     fun show() {
         if (padAdded) return
-        val token = anchorToken ?: anchorTokenProvider() ?: return
+        val token = anchorToken ?: anchorTokenProvider()
+        if (token == null) {
+            Log.w("RadialOverlayController",
+                "show() deferred — IME window token not yet available")
+            return
+        }
 
         val dm = context.resources.displayMetrics
         val screenW = dm.widthPixels.toFloat()

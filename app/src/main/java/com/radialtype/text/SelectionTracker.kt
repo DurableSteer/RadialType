@@ -61,7 +61,11 @@ class SelectionTracker(
             TouchState.SYMBOL ->
                 currentPrimaryChar = characterMap.getPrimaryChar(currentRing, currentSegment, mode)
 
-            TouchState.DELETE ->
+            // DELETE and CURSOR carry no selection: delete's counts and
+            // cursor's offsets are owned by the FSM/InputDispatcher, so
+            // the tracker just drops its label.
+            TouchState.DELETE,
+            TouchState.CURSOR ->
                 currentPrimaryChar = ""
 
             TouchState.AXIS_PENDING,
@@ -69,7 +73,6 @@ class SelectionTracker(
         }
         if (previous != state) notifyChanged()
     }
-
     fun currentLabel(): String {
         return when (currentState) {
             TouchState.IDLE -> ""
@@ -81,6 +84,9 @@ class SelectionTracker(
             }
             TouchState.NUMBER, TouchState.SYMBOL ->
                 if (currentRing == Ring.NONE) "" else currentPrimaryChar
+            // Cursor feedback renders its own indicator in the renderer
+            // (◇ + arrows from cursorDx/cursorDy), so the label is empty.
+            TouchState.CURSOR,
             TouchState.DELETE, TouchState.AXIS_PENDING -> ""
         }
     }

@@ -35,11 +35,18 @@ class RadialTypeIME : InputMethodService() {
     ) {
         super.onStartInputView(info, restarting)
         window?.window?.setLayout(1, 1)
-        // Bind pad + overlay to THIS IME window instance. A fresh token
-        // means the window was recreated (session switch) — the controller
-        // tears down and rebuilds its children for the new token.
         overlayController?.setAnchorToken(inputView?.windowToken)
         overlayController?.setEditorInfo(info)
+        overlayController?.show()
+    }
+    
+    override fun onWindowShown() {
+        super.onWindowShown()
+        // onStartInputView can fire before the input view is attached to a
+        // window (first-show-after-IME-picker-switch path), leaving
+        // windowToken null and show() dead. This hook runs after the window
+        // is up, closing the race; show() no-ops if already visible.
+        overlayController?.setAnchorToken(inputView?.windowToken)
         overlayController?.show()
     }
 

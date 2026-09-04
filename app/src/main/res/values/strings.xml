@@ -4,6 +4,17 @@
     <string name="settings_activity_title">RadialType Settings</string>
     <string name="btn_enable">Enable Keyboard</string>
     <string name="btn_switch">Switch Keyboard</string>
+    
+    <string-array name="haptic_style_names">
+        <item>Custom pulses</item>
+        <item>System — crisp</item>
+        <item>System — heavy</item>
+    </string-array>
+    <string-array name="haptic_style_values">
+        <item>legacy</item>
+        <item>system_click</item>
+        <item>system_heavy</item>
+    </string-array>
 
     <!-- Layout editor -->
     <string name="layout_editor_hint">Enter a JSON layout (lowercase letters recommended). Each ring array has 8 slots (segment 0 = east, clockwise). Tokens: ENTER, SHIFT, SPACE. Optional "digits" and "symbols" objects ({ "inner": […], "outer": […] }) customize the double-tap up/down menus.</string>
