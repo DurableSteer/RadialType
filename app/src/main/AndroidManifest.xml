@@ -26,6 +26,18 @@
             android:name=".settings.LayoutEditorActivity"
             android:exported="false"
             android:label="Custom Layout" />
+        
+        <activity
+            android:name=".bench.BenchActivity"
+            android:exported="false"
+            android:label="Accuracy Benchmark"
+            android:screenOrientation="portrait" />
+        
+        <activity
+            android:name=".bench.BenchHistoryActivity"
+            android:exported="false"
+            android:label="Benchmark History"
+            android:screenOrientation="portrait" />
 
         <!-- Standalone settings host, reachable from system IME settings. -->
         <activity

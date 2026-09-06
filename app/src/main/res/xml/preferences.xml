@@ -114,10 +114,26 @@
             android:key="dwell_duration"
             android:title="Dwell duration (ms)"
             android:summary="How long the finger must rest before the secondary syllable menu opens"
-            android:defaultValue="100"
+            android:defaultValue="140"
             app:min="1"
             android:max="800"
             app:showSeekBarValue="true" />
+        
+        <SwitchPreferenceCompat
+            android:key="dwell_gate_enabled"
+            android:title="Dwell stillness gate"
+            android:summary="The syllable menu opens only when the finger has actually stopped — fast flicks never trigger it"
+            android:defaultValue="true" />
+
+        <SeekBarPreference
+            android:key="dwell_gate_speed"
+            android:title="Dwell speed ceiling"
+            android:summary="Finger speeds above this restart the dwell clock (0.01–0.50 dp/ms; 3 ≈ a parked finger)"
+            android:defaultValue="15"
+            app:min="1"
+            android:max="50"
+            app:showSeekBarValue="true"
+            android:dependency="dwell_gate_enabled" />
 
         <SwitchPreferenceCompat
             android:key="auto_space"
@@ -147,6 +163,43 @@
             android:title="Angle lock"
             android:summary="Once a column is entered, sideways drift is ignored until you return to the centre or lift."
             android:defaultValue="false" />
+        
+        <SwitchPreferenceCompat
+            android:key="onset_exit_angle"
+            android:title="Launch-direction correction"
+            android:summary="Blend the direction of travel into the angle that picks the column when leaving the centre — corrects curved flick launches"
+            android:defaultValue="true"
+            android:dependency="angle_lock" />
+
+        <SeekBarPreference
+            android:key="onset_position_weight"
+            android:title="Launch blend — position weight (%)"
+            android:summary="100 = pure finger position, 0 = pure travel direction; 60 balances both"
+            android:defaultValue="60"
+            app:min="0"
+            android:max="100"
+            app:showSeekBarValue="true"
+            android:dependency="onset_exit_angle" />
+
+        <SeekBarPreference
+            android:key="onset_velocity_window"
+            android:title="Launch window (ms)"
+            android:summary="How far back the travel direction is measured (16–120 ms)"
+            android:defaultValue="40"
+            app:min="16"
+            android:max="120"
+            app:showSeekBarValue="true"
+            android:dependency="onset_exit_angle" />
+
+        <SeekBarPreference
+            android:key="onset_min_speed"
+            android:title="Launch speed floor"
+            android:summary="Exits slower than this use the finger position only (0.01–0.50 dp/ms)"
+            android:defaultValue="5"
+            app:min="1"
+            android:max="50"
+            app:showSeekBarValue="true"
+            android:dependency="onset_exit_angle" />
 
         <SeekBarPreference
             android:key="segment_hysteresis"
@@ -217,7 +270,7 @@
             android:key="mode_lock_grace"
             android:title="Menu settle delay (ms)"
             android:summary="After flicking to numbers/symbols, the menu follows the finger and ignores selection for this long"
-            android:defaultValue="120"
+            android:defaultValue="80"
             app:min="0"
             android:max="300"
             app:showSeekBarValue="true" />
@@ -320,7 +373,7 @@
             android:key="deadzone_radius"
             android:title="Deadzone size (dp)"
             android:summary="Radius of the centre zone where no character is selected"
-            android:defaultValue="32"
+            android:defaultValue="15"
             app:min="5"
             android:max="50"
             app:showSeekBarValue="true" />
@@ -329,9 +382,18 @@
             android:key="inner_ring_radius"
             android:title="Inner ring outer edge (dp)"
             android:summary="Outside radius of the inner row — lowering it squishes the inner ring"
-            android:defaultValue="60"
+            android:defaultValue="57"
             app:min="30"
             android:max="100"
+            app:showSeekBarValue="true" />
+        
+        <SeekBarPreference
+            android:key="inner_padding"
+            android:title="Inner ring padding (dp)"
+            android:summary="Deepens the inner band so flicks aimed at inner cells don't spill into the outer ring"
+            android:defaultValue="0"
+            app:min="0"
+            android:max="20"
             app:showSeekBarValue="true" />
 
         <SeekBarPreference
@@ -381,6 +443,29 @@
             android:key="open_layout_editor"
             android:title="Custom layout"
             android:summary="Edit ring characters and function keys (DEL, SHIFT, SPACE)" />
+    </PreferenceCategory>
+    
+    <PreferenceCategory android:title="Benchmark">
+        <Preference
+            android:key="open_benchmark"
+            android:title="Flick accuracy benchmark"
+            android:summary="Score your flicks cell-by-cell against the current settings" />
+        <Preference
+            android:key="open_bench_history"
+            android:title="Session history &amp; comparison"
+            android:summary="Saved runs, hit rates, per-cell A/B deltas" />
+        <SwitchPreference
+            android:key="bench_repeat_seed"
+            android:title="Repeat same playlist"
+            android:summary="Replays the last seed so A/B runs share an identical target order"
+            android:defaultValue="false" />
+        <ListPreference
+            android:key="bench_trials_per_target"
+            android:title="Session length"
+            android:entries="@array/bench_trial_counts"
+            android:entryValues="@array/bench_trial_values"
+            android:defaultValue="6"
+            android:summary="%s flicks per cell" />
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Activation">

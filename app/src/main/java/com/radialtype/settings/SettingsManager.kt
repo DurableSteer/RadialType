@@ -13,6 +13,10 @@ object SettingsManager {
 
     // ── Preference keys (must match res/xml/preferences.xml) ─────
     const val KEY_DEBUG_MODE = "debug_mode"
+    const val KEY_OPEN_BENCHMARK = "open_benchmark"
+    const val KEY_BENCH_REPEAT_SEED = "bench_repeat_seed"
+    const val KEY_BENCH_LAST_SEED = "bench_last_seed"
+    const val KEY_BENCH_TRIALS = "bench_trials_per_target"
     const val KEY_HAPTICS = "haptic_feedback"
     const val KEY_HAPTIC_STYLE = "haptic_style"
     const val KEY_HAPTIC_INTENSITY = "haptic_intensity"
@@ -39,6 +43,7 @@ object SettingsManager {
     const val KEY_AUTO_CAPITALIZATION = "auto_capitalization"
     const val KEY_INNER_RING_RADIUS = "inner_ring_radius"
     const val KEY_OUTER_RING_RADIUS = "outer_ring_radius"
+    const val KEY_INNER_PADDING = "inner_padding"
     const val KEY_CUSTOM_LAYOUT = "custom_layout_json"
     const val KEY_OPEN_LAYOUT_EDITOR = "open_layout_editor"
     const val KEY_ENABLE_KEYBOARD_BUTTON = "enable_keyboard_button"
@@ -56,11 +61,21 @@ object SettingsManager {
     const val KEY_REACH_PREFIX = "reach_"
     const val KEY_HAND_PRESET = "hand_preset"
     const val KEY_ANGLE_LOCK = "angle_lock"
+    const val KEY_ONSET_ENABLED = "onset_exit_angle"
+    const val KEY_ONSET_POSITION_WEIGHT = "onset_position_weight"
+    const val KEY_ONSET_VELOCITY_WINDOW = "onset_velocity_window"
+    const val KEY_ONSET_MIN_SPEED = "onset_min_speed"
+    const val KEY_DWELL_GATE_ENABLED = "dwell_gate_enabled"
+    const val KEY_DWELL_GATE_SPEED = "dwell_gate_speed"
 
     // ── Bounds & defaults ────────────────────────────────────────
     const val DWELL_MIN = 1
     const val DWELL_MAX = 800
-    const val DWELL_DEFAULT = 100
+    const val DWELL_DEFAULT = 140
+    
+    const val DWELL_GATE_SPEED_MIN = 1        // 0.01 dp/ms
+    const val DWELL_GATE_SPEED_MAX = 50       // 0.50 dp/ms
+    const val DWELL_GATE_SPEED_DEFAULT = 15    // 0.03 dp/ms
 
     const val VIBRATION_MIN = 1
     const val VIBRATION_MAX = 150
@@ -104,7 +119,7 @@ object SettingsManager {
 
     const val MODE_GRACE_MIN = 0
     const val MODE_GRACE_MAX = 300
-    const val MODE_GRACE_DEFAULT = 120
+    const val MODE_GRACE_DEFAULT = 80
     
     // Per-direction reach, percent. 100 = full reach (longest axis of
     // the shape), 50 = half. Values are RELATIVE: the getter
@@ -119,7 +134,14 @@ object SettingsManager {
 
     const val INNER_RING_MIN = 40f
     const val INNER_RING_MAX = 140f
-    const val INNER_RING_DEFAULT = 60f
+    const val INNER_RING_DEFAULT = 57f
+    
+    // Extra depth (dp) appended to the inner ring's outer edge. 0 = legacy
+    // geometry. Widens the inner band so flicks aimed at inner cells don't
+    // spill into the outer ring; the outer band shrinks by the same amount.
+    const val INNER_PADDING_MIN = 0
+    const val INNER_PADDING_MAX = 20
+    const val INNER_PADDING_DEFAULT = 0
 
     const val OUTER_RING_MIN = 80f
     const val OUTER_RING_MAX = 240f
@@ -127,7 +149,27 @@ object SettingsManager {
 
     const val DEADZONE_MIN = 10f
     const val DEADZONE_MAX = 60f
-    const val DEADZONE_DEFAULT = 32f
+    const val DEADZONE_DEFAULT = 15f
+    
+    // ── Onset-weighted exit angle ─────────────────────────────────
+    // Master toggle for the velocity-blended launch direction.
+    // Position weight is stored as a percent (0..100): how much of the
+    // exit-angle blend comes from the positional bearing vs. travel
+    // direction. Velocity window is milliseconds of look-back. The speed
+    // floor is stored in hundredths of dp/ms (slider 1..50 → 0.01..0.50);
+    // exits slower than the floor use pure position — it separates
+    // deliberate slow entries from fast flicks.
+    const val ONSET_POSITION_MIN = 0        // 0%  = pure velocity
+    const val ONSET_POSITION_MAX = 100      // 100% = pure position (off, effectively)
+    const val ONSET_POSITION_DEFAULT = 60
+
+    const val ONSET_WINDOW_MIN = 16
+    const val ONSET_WINDOW_MAX = 120
+    const val ONSET_WINDOW_DEFAULT = 40
+
+    const val ONSET_SPEED_MIN = 1           // 0.01 dp/ms
+    const val ONSET_SPEED_MAX = 50          // 0.50 dp/ms
+    const val ONSET_SPEED_DEFAULT = 5       // 0.05 dp/ms
     
     // ── Hysteresis bounds (stored in tenths) ─────────────────────
     const val RING_HYSTERESIS_MIN = 0      // 0.0 dp
@@ -247,6 +289,39 @@ object SettingsManager {
     var angleLockEnabled: Boolean
         get() = prefs?.getBoolean(KEY_ANGLE_LOCK, false) ?: false
         set(value) = put { it.putBoolean(KEY_ANGLE_LOCK, value) }
+    
+    /** Blend travel direction into the deadzone-exit angle so curved
+     *  flick launches pick the intended spoke. */
+    var onsetExitAngleEnabled: Boolean
+        get() = prefs?.getBoolean(KEY_ONSET_ENABLED, true) ?: true
+        set(value) = put { it.putBoolean(KEY_ONSET_ENABLED, value) }
+
+    /** Position share (%) of the exit-angle blend; remainder is velocity. */
+    var onsetPositionWeight: Float
+        get() = clamp(prefs?.getInt(KEY_ONSET_POSITION_WEIGHT, ONSET_POSITION_DEFAULT)
+            ?: ONSET_POSITION_DEFAULT, ONSET_POSITION_MIN, ONSET_POSITION_MAX) / 100f
+        set(value) = put {
+            it.putInt(KEY_ONSET_POSITION_WEIGHT,
+                clamp((value * 100f).toInt(), ONSET_POSITION_MIN, ONSET_POSITION_MAX))
+        }
+
+    /** Look-back window (ms) for the exit-velocity estimate. */
+    var onsetVelocityWindowMs: Int
+        get() = clamp(prefs?.getInt(KEY_ONSET_VELOCITY_WINDOW, ONSET_WINDOW_DEFAULT)
+            ?: ONSET_WINDOW_DEFAULT, ONSET_WINDOW_MIN, ONSET_WINDOW_MAX)
+        set(value) = put {
+            it.putInt(KEY_ONSET_VELOCITY_WINDOW,
+                clamp(value, ONSET_WINDOW_MIN, ONSET_WINDOW_MAX))
+        }
+
+    /** Exits slower than this (dp/ms) skip the velocity term. */
+    var onsetMinSpeedDpPerMs: Float
+        get() = clamp(prefs?.getInt(KEY_ONSET_MIN_SPEED, ONSET_SPEED_DEFAULT)
+            ?: ONSET_SPEED_DEFAULT, ONSET_SPEED_MIN, ONSET_SPEED_MAX) / 100f
+        set(value) = put {
+            it.putInt(KEY_ONSET_MIN_SPEED,
+                clamp((value * 100f).toInt(), ONSET_SPEED_MIN, ONSET_SPEED_MAX))
+        }
 
     var autoSpaceEnabled: Boolean
         get() = prefs?.getBoolean(KEY_AUTO_SPACE, false) ?: false
@@ -262,6 +337,21 @@ object SettingsManager {
         get() = clamp(prefs?.getInt(KEY_DWELL_DURATION, DWELL_DEFAULT) ?: DWELL_DEFAULT,
             DWELL_MIN, DWELL_MAX)
         set(value) = put { it.putInt(KEY_DWELL_DURATION, clamp(value, DWELL_MIN, DWELL_MAX)) }
+    
+    /** When on, dwell only completes if the finger stays below the speed ceiling. */
+    var dwellGateEnabled: Boolean
+        get() = prefs?.getBoolean(KEY_DWELL_GATE_ENABLED, true) ?: true
+        set(value) = put { it.putBoolean(KEY_DWELL_GATE_ENABLED, value) }
+
+    /** Stillness ceiling (dp/ms): faster motion restarts the dwell clock. */
+    var dwellGateMaxSpeedDpPerMs: Float
+        get() = clamp(prefs?.getInt(KEY_DWELL_GATE_SPEED, DWELL_GATE_SPEED_DEFAULT)
+            ?: DWELL_GATE_SPEED_DEFAULT,
+            DWELL_GATE_SPEED_MIN, DWELL_GATE_SPEED_MAX) / 100f
+        set(value) = put {
+            it.putInt(KEY_DWELL_GATE_SPEED,
+                clamp((value * 100f).toInt(), DWELL_GATE_SPEED_MIN, DWELL_GATE_SPEED_MAX))
+        }
 
     var vibrationLengthMs: Int
         get() = clamp(prefs?.getInt(KEY_VIBRATION_LENGTH, VIBRATION_DEFAULT) ?: VIBRATION_DEFAULT,
@@ -359,6 +449,16 @@ object SettingsManager {
         set(value) = put {
             it.putInt(KEY_CURSOR_SENS_V, (value * 10f).toInt().coerceIn(1, 100))
         }
+        
+    val benchRepeatSeed: Boolean
+        get() = prefs?.getBoolean(KEY_BENCH_REPEAT_SEED, false) ?: false
+
+    var benchLastSeed: Long
+        get() = prefs?.getString(KEY_BENCH_LAST_SEED, null)?.toLongOrNull() ?: 0L
+        set(value) { prefs?.edit()?.putString(KEY_BENCH_LAST_SEED, value.toString())?.apply() }
+
+    val benchTrialsPerTarget: Int
+        get() = prefs?.getString(KEY_BENCH_TRIALS, null)?.toIntOrNull() ?: 6
     
     // ── Thumb-reach profile (per cardinal direction) ───────────
   
@@ -442,6 +542,15 @@ object SettingsManager {
             it.putInt(KEY_INNER_RING_RADIUS, clamp(value.toInt(),
                 INNER_RING_MIN.toInt(), INNER_RING_MAX.toInt()))
         }
+    
+    /** Widening (dp) of the inner band — pushes the inner→outer boundary outward. */
+    var innerPaddingDp: Float
+    get() = clamp(prefs?.getInt(KEY_INNER_PADDING, INNER_PADDING_DEFAULT)
+        ?: INNER_PADDING_DEFAULT, INNER_PADDING_MIN, INNER_PADDING_MAX).toFloat()
+    set(value) = put {
+        it.putInt(KEY_INNER_PADDING,
+            clamp(value.toInt(), INNER_PADDING_MIN, INNER_PADDING_MAX))
+    }
 
     var outerRingRadius: Float
         get() = clamp(prefs?.getInt(KEY_OUTER_RING_RADIUS, OUTER_RING_DEFAULT.toInt())

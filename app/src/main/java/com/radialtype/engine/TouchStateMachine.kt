@@ -5,8 +5,10 @@ import android.util.Log
 import android.view.MotionEvent
 import android.os.Handler
 import android.os.Looper
+import com.radialtype.bench.BenchObserver
 import com.radialtype.engine.GeometryEngine.Ring
 import com.radialtype.settings.SettingsManager
+
 
 /**
  * Gesture mode selected by the double-tap gateway. LETTERS is the
@@ -64,6 +66,26 @@ class TouchStateMachine(
 
         /** Default dwell duration before PRIMARY → SECONDARY. */
         const val DEFAULT_DWELL_MS = 125L
+        
+        /** Position share in the onset-weighted exit-angle blend (rest = velocity). */
+        const val ONSET_POSITION_WEIGHT = 0.6f
+
+        /** Look-back window for the exit-velocity estimate (ms). */
+        const val ONSET_VELOCITY_WINDOW_MS = 40L
+        
+        /** Look-back window (ms) for the dwell stillness velocity check. */
+        const val DWELL_GATE_WINDOW_MS = 40L
+
+        /** Fallback stillness ceiling (dp/ms) when SettingsManager is uninitialized. */
+        const val DWELL_GATE_MAX_SPEED = 0.03f
+        
+        /** Fire is blocked only if an above-ceiling move happened within
+         *  this wall-clock window of the timer maturing. Covers batching
+         *  overlap; a parked finger goes stale instantly and is allowed. */
+        const val DWELL_GATE_FIRE_GRACE_MS = 50L
+
+        /** Exit speeds below this (dp/ms) skip the velocity term — parked-finger exits use pure position. */
+        const val MIN_EXIT_SPEED_DP_PER_MS = 0.05f
 
         /** Fallback double-tap window when SettingsManager is uninitialized. */
         const val DOUBLE_TAP_FALLBACK_MS = 300L
@@ -105,6 +127,13 @@ class TouchStateMachine(
             handler = Handler(Looper.getMainLooper()),
             callback = { enterSecondary() }
         )
+    
+    /**
+     * Optional benchmark tap. Null in production; every call site is
+     * guarded, so idle cost is one field read per event. Implementations
+     * must never mutate FSM state from callbacks.
+     */
+    var benchObserver: BenchObserver? = null
 
     // ── Gesture state ────────────────────────────────────────────
 
@@ -140,10 +169,26 @@ class TouchStateMachine(
         private set
 
     private var lastRingChangeTime: Long = 0L
+    
+    /**
+     * Wall-clock (uptime) stamp of the last MOVE sample whose speed was
+     * at or above the stillness ceiling. 0 = none this gesture. Used by
+     * the fire-time check instead of re-measuring velocity — the buffer
+     * reading FREEZES when a parked finger stops generating MOVE events,
+     * and the frozen tail of a deceleration can sit above the ceiling
+     * indefinitely, re-blocking every dwell fire (the 400–500 ms lag).
+     */
+    private var lastFastMoveWallMs = 0L
 
     /** Pointer that owns the gesture, captured on ACTION_DOWN. */
     var activePointerId: Int = MotionEvent.INVALID_POINTER_ID
         private set
+    
+    /**
+     * Recent touch samples for the onset-weighted exit angle. Reset on
+     * ACTION_DOWN, appended on every handled move. Zero cost when idle.
+     */
+    private val motionHistory = MotionHistory()
 
     var secondaryAnchorX: Float = 0f
         private set
@@ -236,6 +281,8 @@ class TouchStateMachine(
         geometryEngine.refreshFromSettings()
         dwellDurationMs = SettingsManager.dwellDurationMs.toLong()
         dwellTimer.dwellDurationMs = dwellDurationMs
+        // Dwell gate ceiling rides the same live-pull path; nothing to
+        // cache — fingerSpeed / dwellGateMaxSpeed read settings on demand.
     }
     
      /**
@@ -258,6 +305,7 @@ class TouchStateMachine(
      * in progress releases its text-selection preview.
      */
     fun reset() {
+        benchObserver?.onGestureAborted(currentEventTime)
         if (state == TouchState.DELETE) {
             deleteLeftCount = 0
             deleteRightCount = 0
@@ -327,12 +375,26 @@ class TouchStateMachine(
             Log.d(TAG, "enterSecondary() suppressed — no segment resolved yet")
             return
         }
+        // ── Dwell stillness gate: fire-time double-check ─────────────
+        if (dwellGateEnabled()) {
+            val sinceFastMs = SystemClock.uptimeMillis() - lastFastMoveWallMs
+            if (lastFastMoveWallMs != 0L && sinceFastMs < DWELL_GATE_FIRE_GRACE_MS) {
+                Log.d(TAG, "Dwell gate blocked fire — fast move %.0f ms ago"
+                    .format(sinceFastMs))
+                dwellTimer.start()
+                return
+            }
+        }
         secondaryAnchorX = currentX
         secondaryAnchorY = currentY
+        benchObserver?.onAnchorUpdate(currentX, currentY, true, currentEventTime)
         lastRingChangeTime = 0L
-        // Fresh menu, fresh anchors: every cell the finger enters from
-        // here on is "new" as far as onCellChanged is concerned.
         resetSignaledCell()
+        // Menu is open; the dwell timer has no further job this gesture.
+        // Without this cancel it keeps re-arming and re-calling this
+        // function, which the state guard ignores but logs (and would
+        // eventually catch if the FSM ever bounced states).
+        dwellTimer.cancel()
         transitionTo(TouchState.SECONDARY)
     }
 
@@ -400,6 +462,14 @@ class TouchStateMachine(
     private fun handleDown(event: MotionEvent): Boolean {
         refreshFromSettings()
 
+        // Gesture start: stamp event time and seed the motion buffer so
+        // the very first exit from the deadzone already has velocity
+        // history (short flicks reach the edge within a few samples).
+        currentEventTime = event.eventTime
+        motionHistory.reset()
+        motionHistory.add(event.x, event.y, event.eventTime)
+        benchObserver?.onGestureStart(event.x, event.y, event.eventTime)
+
         // Arming rule A: previous gesture ended in the deadzone and this
         // DOWN arrives within the configured window → gateway gesture.
         val windowMs = if (SettingsManager.isInitialized) {
@@ -415,6 +485,7 @@ class TouchStateMachine(
             currentX = event.x
             currentY = event.y
             lastUpInDeadzone = false
+            benchObserver?.onAnchorUpdate(anchorX, anchorY, false, event.eventTime)
             dwellTimer.cancel()
             currentRing = Ring.NONE
             currentSegment = -1
@@ -432,6 +503,7 @@ class TouchStateMachine(
         anchorY = event.y
         currentX = event.x
         currentY = event.y
+        benchObserver?.onAnchorUpdate(anchorX, anchorY, false, event.eventTime)
 
         currentRing = Ring.NONE
         currentSegment = -1
@@ -449,6 +521,8 @@ class TouchStateMachine(
         currentX = event.getX(pointerIndex)
         currentY = event.getY(pointerIndex)
         currentEventTime = event.eventTime
+        motionHistory.add(currentX, currentY, event.eventTime)
+        benchObserver?.onSample(currentX, currentY, event.eventTime)
 
         when (state) {
             TouchState.PRIMARY      -> handlePrimaryMove()
@@ -459,6 +533,19 @@ class TouchStateMachine(
             TouchState.NUMBER,
             TouchState.SYMBOL       -> handleModeMove()
             TouchState.IDLE         -> { /* spurious MOVE with no DOWN — ignore */ }
+        }
+
+        // ── Dwell stillness gate ─────────────────────────────────────
+        // Runs after resolution so the gate reacts to the freshest possible
+        // velocity sample. While the finger is moving faster than the
+        // ceiling, the dwell clock RESTARTS on every move — so fast flicks
+        // never accumulate dwell time, only a parked finger does. Applied
+        // per state so gating tracks the same menu the finger is navigating:
+        // in PRIMARY this defers the menu open; in SECONDARY it re-anchors
+        // the gate check only (the secondary menu is dwell-immune, so no
+        // timer action is needed there).
+        if (state == TouchState.PRIMARY || state == TouchState.SECONDARY) {
+            applyDwellStillnessGate()
         }
 
         onPositionChanged?.invoke()
@@ -542,12 +629,14 @@ class TouchStateMachine(
 
         lastUpTimestamp = SystemClock.uptimeMillis()
         lastUpInDeadzone = currentRing == Ring.NONE
+        benchObserver?.onCommit(currentRing, currentSegment, event.eventTime)
         onCommit?.invoke()
         transitionTo(TouchState.IDLE)
         return true
     }
 
     private fun handleCancel(): Boolean {
+        benchObserver?.onGestureAborted(currentEventTime)
         if (state == TouchState.DELETE) {
             deleteLeftCount = 0
             deleteRightCount = 0
@@ -695,67 +784,167 @@ class TouchStateMachine(
      *              [SEGMENT_SUPPRESSION_MS] window (micro-flick case).
      */
      private fun resolveGeometry(anchorX: Float, anchorY: Float, final: Boolean = false) {
-        val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
-        val distDp = GeometryEngine.pxToDp(distPx, density)
-        val angleDeg = geometryEngine.angle(anchorX, anchorY, currentX, currentY)
+          val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
+          val distDp = GeometryEngine.pxToDp(distPx, density)
+          val posAngleDeg = geometryEngine.angle(anchorX, anchorY, currentX, currentY)
 
-        val newRing = geometryEngine.computeRing(distDp, angleDeg, currentRing)
+          // Exit detection BEFORE currentRing is mutated below.
+          val wasInDeadzone = currentRing == Ring.NONE
+          val newRing = geometryEngine.computeRing(distDp, posAngleDeg, currentRing)
 
-        if (newRing != currentRing) {
-            previousRing = currentRing
-            currentRing = newRing
-            if (newRing == Ring.NONE) {
-                // Entering the deadzone deselects everything — and any
-                // cell the finger later re-enters must signal again. It
-                // also releases the angle lock (deliberate re-aim).
-                previousSegment = currentSegment
-                currentSegment = -1
-                resetSignaledCell()
+          // ── Onset-weighted exit angle ─────────────────────────────────
+          // The FIRST angle resolved after leaving the deadzone decides the
+          // spoke — and it is the noisiest sample of the whole gesture
+          // (edge jitter, curved flicks, stale batched coordinates). Blend
+          // the positional bearing with the direction of travel over the
+          // last ONSET_VELOCITY_WINDOW_MS so launch curvature can't steal
+          // the spoke. Applies to deadzone exits in BOTH menus (shared
+          // resolution path), including re-aim after a deadzone visit.
+          // Slow/parked exits fall back to pure position.
+          var angleDeg = posAngleDeg
+          if (onsetEnabled() && newRing != Ring.NONE && wasInDeadzone) {
+              motionHistory.velocity(onsetVelocityWindowMs())?.let { v ->
+                  val speedDpPerMs = GeometryEngine.pxToDp(
+                      Math.hypot(v.first.toDouble(), v.second.toDouble()).toFloat(),
+                      density
+                  )
+                  if (speedDpPerMs >= onsetMinSpeedDpPerMs()) {
+                      val velAngleDeg = geometryEngine.angle(0f, 0f, v.first, v.second)
+                      angleDeg = MotionHistory.blendAngles(
+                          posAngleDeg, velAngleDeg, onsetPositionWeight()
+                      )
+                  }
+              }
+          }
+
+          if (newRing != currentRing) {
+              previousRing = currentRing
+              currentRing = newRing
+              if (newRing == Ring.NONE) {
+                  // Entering the deadzone deselects everything — and any
+                  // cell the finger later re-enters must signal again. It
+                  // also releases the angle lock (deliberate re-aim).
+                  previousSegment = currentSegment
+                  currentSegment = -1
+                  resetSignaledCell()
+              }
+              lastRingChangeTime = currentEventTime
+              onRingChanged?.invoke(newRing)
+              benchObserver?.onRingChanged(previousRing, newRing, currentEventTime)
+              dwellTimer.reset()
+          }
+
+          val rawSegment = geometryEngine.computeSegment(angleDeg, currentSegment)
+
+          // ── Angle lock ────────────────────────────────────────────
+          // First populated segment of an excursion is ADOPTED as the
+          // locked column; afterwards the finger is pinned to it. Escape
+          // routes: deadzone (cleared above), lift, or entering the
+          // secondary menu (resetSignaledCell in enterSecondary). Note the
+          // lock now adopts the ONSET-CORRECTED segment, which is the whole
+          // point: a bad first sample can no longer poison the entire pin.
+          var newSegment = rawSegment
+          if (angleLockEnabled() && newRing != Ring.NONE) {
+              if (lockedSegment < 0) {
+                  lockedSegment = rawSegment
+              } else {
+                  newSegment = lockedSegment
+              }
+          }
+
+          val timeSinceRingChange = currentEventTime - lastRingChangeTime
+          val suppressed = !final &&
+                currentSegment != -1 &&
+                timeSinceRingChange < suppressionWindowMs()
+
+          if (!suppressed && newRing != Ring.NONE && newSegment != currentSegment) {
+              previousSegment = currentSegment
+              currentSegment = newSegment
+              onSegmentChanged?.invoke(newSegment)
+              dwellTimer.reset()
+          }
+
+          if (currentRing != Ring.NONE && currentSegment != -1 &&
+              (currentRing != signaledRing || currentSegment != signaledSegment)
+          ) {
+              signaledRing = currentRing
+              signaledSegment = currentSegment
+              onCellChanged?.invoke(currentRing, currentSegment)
+          }
+      }
+      
+    private fun onsetEnabled(): Boolean =
+        if (SettingsManager.isInitialized) SettingsManager.onsetExitAngleEnabled
+        else true
+
+    private fun onsetPositionWeight(): Float =
+        if (SettingsManager.isInitialized) SettingsManager.onsetPositionWeight
+        else ONSET_POSITION_WEIGHT
+
+    private fun onsetVelocityWindowMs(): Long =
+        if (SettingsManager.isInitialized) SettingsManager.onsetVelocityWindowMs.toLong()
+        else ONSET_VELOCITY_WINDOW_MS
+
+    private fun onsetMinSpeedDpPerMs(): Float =
+        if (SettingsManager.isInitialized) SettingsManager.onsetMinSpeedDpPerMs
+        else MIN_EXIT_SPEED_DP_PER_MS
+    /**
+     * Dwell stillness gate, move-side. While the finger is moving faster
+     * than the stillness ceiling, the dwell clock is restarted so a fast
+     * flick can never accrue dwell time. Paired with the DOWN/UP cancels
+     * and reset-on-cell-change, the effective contract is:
+     *
+     *   dwell timer restarts on     finger speed ≥ ceiling  (still moving)
+     *   dwell timer proceeds        finger held still for dwellDurationMs
+     *
+     * In SECONDARY the menu is already open and dwell cannot fire again,
+     * so the gate is a no-op there — the check exists only to keep the
+     * velocity bookkeeping honest when a gesture later falls back to
+     * PRIMARY-anchored states (NUMBER/SYMBOL never dwell).
+     */
+    private var lastSpeedLogT = 0L
+
+    private fun applyDwellStillnessGate() {
+        if (state == TouchState.PRIMARY) {
+            val speed = currentFingerSpeedDpPerMs()
+            if (speed >= dwellGateMaxSpeedDpPerMs()) {
+                // Still moving fast — stamp it and restart the countdown.
+                lastDwellFireSpeedDpPerMs = speed
+                lastFastMoveWallMs = SystemClock.uptimeMillis()
+                dwellTimer.reset()
             }
-            lastRingChangeTime = currentEventTime
-            onRingChanged?.invoke(newRing)
-            dwellTimer.reset()
+            // Slow-or-stopped: let the clock run. Frozen-buffer case needs
+            // no action — no event means no new motion, which IS stillness.
         }
+    }
+    
+    /**
+     * Finger speed (dp/ms) measured at the most recent dwell-fire attempt,
+     * stamped for benchmark logging. −1 = no dwell has fired yet.
+     */
+    var lastDwellFireSpeedDpPerMs: Float = -1f
+        private set
 
-        val rawSegment = geometryEngine.computeSegment(angleDeg, currentSegment)
+    private fun dwellGateEnabled(): Boolean =
+        if (SettingsManager.isInitialized) SettingsManager.dwellGateEnabled else true
 
-        // ── Angle lock ────────────────────────────────────────────
-        // First populated segment of an excursion is ADOPTED as the
-        // locked column; afterwards the finger is pinned to it. Escape
-        // routes: deadzone (cleared above), lift, or entering the
-        // secondary menu (resetSignaledCell in enterSecondary). The
-        // deadzone-edge hysteresis linger means grazing the deadzone
-        // boundary mid-drift does NOT unlock — only a real re-entry
-        // into NONE releases the pin, so sloppy edges don't fight the
-        // very drift suppression the lock exists for.
-        var newSegment = rawSegment
-        if (angleLockEnabled() && newRing != Ring.NONE) {
-            if (lockedSegment < 0) {
-                lockedSegment = rawSegment
-            } else {
-                newSegment = lockedSegment
-            }
-        }
+    private fun dwellGateMaxSpeedDpPerMs(): Float =
+        if (SettingsManager.isInitialized) SettingsManager.dwellGateMaxSpeedDpPerMs
+        else DWELL_GATE_MAX_SPEED
 
-        val timeSinceRingChange = currentEventTime - lastRingChangeTime
-        val suppressed = !final &&
-              currentSegment != -1 &&
-              timeSinceRingChange < suppressionWindowMs()
-
-        if (!suppressed && newRing != Ring.NONE && newSegment != currentSegment) {
-            previousSegment = currentSegment
-            currentSegment = newSegment
-            onSegmentChanged?.invoke(newSegment)
-            dwellTimer.reset()
-        }
-
-        if (currentRing != Ring.NONE && currentSegment != -1 &&
-            (currentRing != signaledRing || currentSegment != signaledSegment)
-        ) {
-            signaledRing = currentRing
-            signaledSegment = currentSegment
-            onCellChanged?.invoke(currentRing, currentSegment)
-        }
+    /**
+     * Displacement speed (dp/ms) of the finger over the trailing
+     * [DWELL_GATE_WINDOW_MS], from the same MotionHistory the onset blend
+     * uses. Returns 0f when no velocity is measurable — an unmeasurable
+     * finger counts as still, so gate mode never opens the menu on a
+     * guess; it errs toward opening.
+     */
+    private fun currentFingerSpeedDpPerMs(): Float {
+        val v = motionHistory.velocity(DWELL_GATE_WINDOW_MS) ?: return 0f
+        return GeometryEngine.pxToDp(
+            Math.hypot(v.first.toDouble(), v.second.toDouble()).toFloat(),
+            density
+        )
     }
 
     private var currentEventTime: Long = 0L
@@ -815,6 +1004,7 @@ class TouchStateMachine(
     private fun transitionTo(newState: TouchState) {
         if (state == newState) return
         Log.d(TAG, "$state → $newState")
+        val oldState = state
         state = newState
 
         when (newState) {
@@ -828,6 +1018,7 @@ class TouchStateMachine(
             TouchState.SYMBOL       -> { /* dwell never fires in locked modes */ }
         }
 
+        benchObserver?.onStateTransition(oldState, newState, currentEventTime)
         onStateChanged?.invoke(newState)
     }
 

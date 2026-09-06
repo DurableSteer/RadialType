@@ -50,6 +50,13 @@ class GeometryEngine(
 
     /** Inner ring ends / outer ring begins (dp). Scales with f(θ). */
     var innerRadiusMax: Float = innerRadiusMaxDp
+    
+    /**
+     * User-tunable widening (dp) of the inner band. Folded into
+     * [innerRadiusMax] by [refreshFromSettings] so all consumers stay
+     * consistent; 0 reproduces the legacy geometry.
+     */
+    var innerPaddingDp: Float = 0f
 
     /** Outer ring ends (dp); beyond this, positions clamp to OUTER. */
     var outerRadiusMax: Float = outerRadiusMaxDp
@@ -80,7 +87,11 @@ class GeometryEngine(
      */
     fun refreshFromSettings() {
         deadZoneRadius = SettingsManager.deadzoneRadius
-        innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
+        innerPaddingDp = SettingsManager.innerPaddingDp
+        // Padding widens the inner band: the inner→outer boundary (and its
+        // hysteresis) moves outward by innerPaddingDp. The outer-radius
+        // floor is checked AFTER padding so enforcement ordering survives.
+        innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f) + innerPaddingDp
         outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
         hysteresisRadiusDp = SettingsManager.ringHysteresisDp
         segmentHysteresisDeg = SettingsManager.segmentHysteresisDeg

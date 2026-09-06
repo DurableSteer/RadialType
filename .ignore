@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+
+LICENSE
+README.md
+
+# Local configuration (machine-specific SDK path)
+local.properties
+
+# IntelliJ / Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Android Studio captures & profiling
+captures/
+.cxx/
+
+# Kotlin
+*.class
+
+# Log files
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+/app/src/test/
+/app/src/main/java/com/radialtype/bench

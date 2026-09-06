@@ -100,10 +100,13 @@ class RadialRenderer(
     private var zoneCY = -1f
     private var zoneRX = 0f
     private var zoneRY = 0f
+    
+    private val effectiveDebug: Boolean
+        get() = debugMode && (!SettingsManager.isInitialized || SettingsManager.debugMode)
 
     private val density = context.resources.displayMetrics.density
     private val appContext = context.applicationContext
-
+        
     private val sectorFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -178,7 +181,8 @@ class RadialRenderer(
         refreshFeelFromSettings()
         if (SettingsManager.isInitialized) {
             deadZoneRadius = SettingsManager.deadzoneRadius
-            innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
+            val padding = SettingsManager.innerPaddingDp
+            innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f) + padding
             outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
             reachProfile = SettingsManager.reachProfile.copyOf()
         }
@@ -216,11 +220,8 @@ class RadialRenderer(
         }
 
         if (effectiveDebug) drawMenu(canvas, cx, cy, accent, data)
-        drawFloatingLabel(canvas, data, accent)
+        if (effectiveDebug) drawFloatingLabel(canvas, data, accent)
     }
-
-    private val effectiveDebug: Boolean
-        get() = debugMode && (!SettingsManager.isInitialized || SettingsManager.debugMode)
 
     private fun drawDeleteFeedback(canvas: Canvas, data: RadialRenderData) {
         if (zoneRX > 0f && zoneRY > 0f && zoneCX >= 0f) {

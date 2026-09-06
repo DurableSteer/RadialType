@@ -36,6 +36,24 @@ class SettingsFragment : PreferenceFragmentCompat() {
                 regenerateLayout()
                 true
             }
+        
+        findPreference<Preference>(SettingsManager.KEY_OPEN_BENCHMARK)
+            ?.setOnPreferenceClickListener {
+                startActivity(Intent(
+                    requireContext(),
+                    com.radialtype.bench.BenchActivity::class.java
+                ))
+                true
+            }
+            
+        findPreference<Preference>("open_bench_history")
+            ?.setOnPreferenceClickListener {
+                startActivity(Intent(
+                    requireContext(),
+                    com.radialtype.bench.BenchHistoryActivity::class.java
+                ))
+                true
+            }
         // Applying a handedness preset seeds all eight reach sliders
         // (and the underlying prefs) in one shot; the sliders stay
         // individually editable afterwards.

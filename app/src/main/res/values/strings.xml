@@ -39,6 +39,19 @@
         <item>0</item><item>1</item><item>2</item><item>3</item>
         <item>4</item><item>5</item><item>6</item><item>7</item>
     </string-array>
+    
+    <string-array name="bench_trial_counts">
+        <item>Quick — 32 trials</item>
+        <item>Short — 64 trials</item>
+        <item>Standard — 96 trials</item>
+        <item>Thorough — 192 trials</item>
+    </string-array>
+    <string-array name="bench_trial_values">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>6</item>
+    </string-array>
 
     <!-- Layout editor -->
     <string name="layout_editor_hint">Enter a JSON layout (lowercase letters recommended). Each ring array has 8 slots (segment 0 = east, clockwise). Tokens: ENTER, SHIFT, SPACE. Optional "digits" and "symbols" objects ({ "inner": […], "outer": […] }) customize the double-tap up/down menus.</string>
