@@ -25,9 +25,8 @@ import com.radialtype.settings.SettingsManager
  * asymmetry = 0 reproduces the legacy perfect circle exactly.
  *
  * Classification normalizes distance: effective = r / f(θ), then the
- * existing fixed-radius logic (deadzone, boundaries, hysteresis) runs
- * on the normalized value. This means every existing hysteresis
- * behavior carries over unchanged, in consistent dp units.
+ * fixed-radius logic (deadzone, boundaries) runs on the normalized
+ * value.
  *
  * **Overshoot clamping:** positions beyond the outer boundary are NOT
  * rejected — they resolve to [Ring.OUTER]. [Ring.NONE] is produced only
@@ -50,22 +49,12 @@ class GeometryEngine(
 
     /** Inner ring ends / outer ring begins (dp). Scales with f(θ). */
     var innerRadiusMax: Float = innerRadiusMaxDp
-    
-    /**
-     * User-tunable widening (dp) of the inner band. Folded into
-     * [innerRadiusMax] by [refreshFromSettings] so all consumers stay
-     * consistent; 0 reproduces the legacy geometry.
-     */
-    var innerPaddingDp: Float = 0f
 
     /** Outer ring ends (dp); beyond this, positions clamp to OUTER. */
     var outerRadiusMax: Float = outerRadiusMaxDp
 
     /** Number of angular segments per ring (45° each). */
     val segmentCount: Int = SEGMENT_COUNT
-
-    /** Ring hysteresis band (dp) — measured in NORMALIZED space. */
-    var hysteresisRadiusDp: Float = HYSTERESIS
 
     /** Angular deadzone around segment boundaries (degrees). */
     var segmentHysteresisDeg: Float = SEGMENT_HYSTERESIS_DEG
@@ -87,13 +76,8 @@ class GeometryEngine(
      */
     fun refreshFromSettings() {
         deadZoneRadius = SettingsManager.deadzoneRadius
-        innerPaddingDp = SettingsManager.innerPaddingDp
-        // Padding widens the inner band: the inner→outer boundary (and its
-        // hysteresis) moves outward by innerPaddingDp. The outer-radius
-        // floor is checked AFTER padding so enforcement ordering survives.
-        innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f) + innerPaddingDp
+        innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
         outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
-        hysteresisRadiusDp = SettingsManager.ringHysteresisDp
         segmentHysteresisDeg = SettingsManager.segmentHysteresisDeg
         reachProfile = SettingsManager.reachProfile.copyOf()
     }
@@ -111,69 +95,31 @@ class GeometryEngine(
      */
     fun boundaryRadius(baseRadiusDp: Float, angleDegrees: Float): Float =
         baseRadiusDp * reachFactorAt(angleDegrees)
-        
+
     /**
      * Identifies which ring a finger position belongs to, honoring the
      * reach profile: the radial distance is NORMALIZED by f(θ) first,
-     * then the fixed-radius classification (with hysteresis) runs.
+     * then the fixed-radius classification runs.
      *
      * @param distanceFromCenter Radial distance from anchor, in dp.
      * @param angleDegrees       Absolute bearing from anchor.
-     * @param previousRing       Ring from the previous frame.
      */
     fun computeRing(
         distanceFromCenter: Float,
-        angleDegrees: Float,
-        previousRing: Ring
+        angleDegrees: Float
     ): Ring {
         val effective = distanceFromCenter / reachFactorAt(angleDegrees)
-        return computeRing(effective, previousRing)
+        return computeRing(effective)
     }
 
     /**
-     * Fixed-radius ring classification, ignoring the reach profile.
-     * Retained for tests and for callers that operate in normalized
-     * space. Runtime gesture code must use the three-argument
-     * [computeRing].
+     * Fixed-radius ring classification in normalized space.
      */
-    fun computeRing(
-        distanceFromCenter: Float,
-        previousRing: Ring
-    ): Ring {
+    fun computeRing(distanceFromCenter: Float): Ring {
         // Overshoot beyond the outer edge: clamp to the outer ring.
         if (distanceFromCenter > outerRadiusMax) return Ring.OUTER
-
-        // ── Deadzone boundary (0 .. deadZoneRadius) ───────────────
-        val deadLower = deadZoneRadius - hysteresisRadiusDp
-        val deadUpper = deadZoneRadius + hysteresisRadiusDp
-
-        if (distanceFromCenter < deadLower) return Ring.NONE
-
-        if (distanceFromCenter <= deadUpper) {
-            return when (previousRing) {
-                Ring.INNER -> Ring.INNER
-                Ring.OUTER -> Ring.OUTER
-                Ring.NONE  -> Ring.NONE
-            }
-        }
-
-        // ── Inner/outer boundary (deadzone .. outerRadiusMax) ─────
-        val boundary = innerRadiusMax
-        val lowerHysteresis = boundary - hysteresisRadiusDp
-        val upperHysteresis = boundary + hysteresisRadiusDp
-
-        return when {
-            distanceFromCenter < lowerHysteresis -> Ring.INNER
-            distanceFromCenter > upperHysteresis -> Ring.OUTER
-            else -> when (previousRing) {
-                Ring.OUTER -> Ring.OUTER
-                Ring.INNER -> Ring.INNER
-                Ring.NONE  -> {
-                    if (distanceFromCenter <= boundary) Ring.INNER
-                    else Ring.OUTER
-                }
-            }
-        }
+        if (distanceFromCenter < deadZoneRadius) return Ring.NONE
+        return if (distanceFromCenter <= innerRadiusMax) Ring.INNER else Ring.OUTER
     }
 
     /**
@@ -238,18 +184,6 @@ class GeometryEngine(
         return degrees.toFloat()
     }
 
-    /**
-     * Which ring a given distance falls in, ignoring hysteresis and the
-     * reach profile. Useful for testing boundary behavior in isolation.
-     */
-    fun ringWithoutHysteresis(distanceFromCenter: Float): Ring {
-        return when {
-            distanceFromCenter < deadZoneRadius -> Ring.NONE
-            distanceFromCenter > innerRadiusMax -> Ring.OUTER  // includes overshoot clamp
-            else -> Ring.INNER
-        }
-    }
-
     companion object {
         // ── Ring radii (dp) — compiled-in defaults ───────────────
         const val DEAD_ZONE_RADIUS = 60f
@@ -261,8 +195,6 @@ class GeometryEngine(
 
         /** Default angular deadzone around segment boundaries (deg). */
         const val SEGMENT_HYSTERESIS_DEG = 2f
-        /** Default ring hysteresis band (dp). */
-        const val HYSTERESIS = 8f
 
         /**
          * Floor for the reach factor: even at asymmetry = 1 the short
@@ -294,6 +226,32 @@ class GeometryEngine(
             if (t >= 1f) return profile[(idx + 1) % SEGMENT_COUNT]
             val smooth = (1.0 - Math.cos(Math.PI * t)).toFloat() / 2f
             return profile[idx] + (profile[(idx + 1) % SEGMENT_COUNT] - profile[idx]) * smooth
+        }
+
+        /**
+         * Radius to classify at COMMIT: the finger's current radius
+         * projected along its radial velocity by [horizonMs], clamped
+         * to [maxShiftDp]. SIGNED — an inward-moving finger projects
+         * inward (must genuinely retreat past the boundary), an
+         * outward one projects outward (undershoot absorbed). A slow
+         * or parked finger (velocity ≈ 0) projects nothing: slow
+         * steering stays exact, only fast lifts get credit.
+         *
+         * Operates in ANCHORED dp space, i.e. before the caller's
+         * reach-factor normalization — computeRing applies f(θ) to
+         * the result uniformly, so the projected shift scales with
+         * the local band geometry.
+         */
+        fun projectedRadiusDp(
+            radiusNowDp: Float,
+            radialVelocityDpPerMs: Float,
+            horizonMs: Int,
+            maxShiftDp: Float
+        ): Float {
+            if (horizonMs <= 0 || maxShiftDp <= 0f) return radiusNowDp
+            val shift = (radialVelocityDpPerMs * horizonMs)
+                .coerceIn(-maxShiftDp, maxShiftDp)
+            return radiusNowDp + shift
         }
 
         /** Converts a pixel distance to dp using the screen density. */

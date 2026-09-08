@@ -4,7 +4,18 @@
     <string name="settings_activity_title">RadialType Settings</string>
     <string name="btn_enable">Enable Keyboard</string>
     <string name="btn_switch">Switch Keyboard</string>
+    <string name="dwell_gate_mode_title">Dwell gate mode</string>
     
+    <string-array name="dwell_gate_mode_entries">
+        <item>Stillness (classic)</item>
+        <item>Bend (fires at the slowdown)</item>
+        <item>Hybrid (either)</item>
+    </string-array>
+    <string-array name="dwell_gate_mode_values">
+        <item>stillness</item>
+        <item>bend</item>
+        <item>hybrid</item>
+    </string-array>
     <string-array name="haptic_style_names">
         <item>Custom pulses</item>
         <item>System — crisp</item>

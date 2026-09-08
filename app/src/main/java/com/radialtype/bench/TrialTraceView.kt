@@ -146,8 +146,6 @@ class TrialTraceView(
     private val reachProfile: FloatArray =
         if (SettingsManager.isInitialized) SettingsManager.reachProfile.copyOf()
         else FloatArray(8) { 1f }
-    private val paddingDp: Float =
-        if (SettingsManager.isInitialized) SettingsManager.innerPaddingDp else 0f
     private val deadDp: Float = if (SettingsManager.isInitialized)
             SettingsManager.deadzoneRadius
         else GeometryEngine.DEAD_ZONE_RADIUS
@@ -155,8 +153,7 @@ class TrialTraceView(
         maxOf(
             if (SettingsManager.isInitialized) SettingsManager.innerRingRadius
             else GeometryEngine.INNER_RADIUS_MAX,
-            deadDp + 20f
-        ) + paddingDp
+            deadDp + 20f ) 
     private val outerDp: Float =
         maxOf(
             if (SettingsManager.isInitialized) SettingsManager.outerRingRadius

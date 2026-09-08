@@ -350,7 +350,6 @@ class RadialKeyboardView(
                 deleteRightCount = touchStateMachine.deleteRightCount,
                 cursorDx = touchStateMachine.cursorColumns,
                 cursorDy = touchStateMachine.cursorLines,
-                lockedSegment = touchStateMachine.lockedSegment,
                 mode = touchStateMachine.activeMode
             )
         )

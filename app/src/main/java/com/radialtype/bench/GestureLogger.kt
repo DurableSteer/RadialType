@@ -1,5 +1,7 @@
 package com.radialtype.bench
 
+import android.util.Log
+
 import com.radialtype.engine.GeometryEngine.Ring
 import com.radialtype.engine.TouchStateMachine.TouchState
 import kotlin.math.hypot
@@ -119,41 +121,124 @@ class TrialRecord(
         } as? BenchEvent.StateTransition ?: return@lazy null
         trans.t - bt
     }
+    
+    // ── Radial landing diagnostics ────────────────────────────────
 
     /**
-     * Finds the sample with the lowest trailing-window speed, using
-     * the same window discipline as MotionHistory: 40 ms look-back,
-     * minimum 8 ms span for a trustworthy reading. Returns
-     * (sampleTimeMs, speedPxPerMs) or null. Plain argmin over the
-     * raw samples — this runs once per record at display time, so
-     * clarity beats cleverness.
+     * Sample nearest in time to a timestamp. Records are small
+     * (hundreds of samples); linear scan is fine and unambiguous.
+     */
+    private fun nearestSampleTo(t: Long): BenchSample? {
+        var best: BenchSample? = null
+        var bestDt = Long.MAX_VALUE
+        for (smp in _samples) {
+            val dt = kotlin.math.abs(smp.t - t)
+            if (dt < bestDt) { bestDt = dt; best = smp }
+        }
+        return best
+    }
+
+    /**
+     * Radial distance from the gesture's plant point (first sample =
+     * touch-down on the pad anchor) to the finger's position when
+     * SECONDARY opened, in px. Null when the menu never opened.
+     */
+    val landingOpenRadiusPx: Float? by lazy {
+        val c = _samples.firstOrNull() ?: return@lazy null
+        val openT = (_events.firstOrNull {
+            it is BenchEvent.StateTransition && it.to == TouchState.SECONDARY
+        } as? BenchEvent.StateTransition)?.t ?: return@lazy null
+        nearestSampleTo(openT)?.let { hypot(it.x - c.x, it.y - c.y) }
+    }
+
+    /**
+     * Radial distance from the plant point to the final resting
+     * position, in px. This is the hand's intended landing.
+     */
+    val landingRestRadiusPx: Float? by lazy {
+        val c = _samples.firstOrNull() ?: return@lazy null
+        val last = _samples.lastOrNull() ?: return@lazy null
+        hypot(last.x - c.x, last.y - c.y)
+    }
+
+    /**
+     * How much further outward the finger traveled AFTER the menu
+     * opened. Strongly positive + a ring miss ⇒ the fire caught the
+     * finger mid-flight (timing artifact, not an aim error).
+     * Near zero ⇒ the finger had settled by open (true aim error).
+     */
+    val openToRestDriftPx: Float? by lazy {
+        val o = landingOpenRadiusPx ?: return@lazy null
+        val r = landingRestRadiusPx ?: return@lazy null
+        r - o
+    }
+
+    /**
+     * Compass angle of the resting position relative to the plant
+     * point, 0–360°, screen coordinates. Join offline against the
+     * target segment to group drift per spoke.
+     */
+    val landingAngleDeg: Float? by lazy {
+        val c = _samples.firstOrNull() ?: return@lazy null
+        val last = _samples.lastOrNull() ?: return@lazy null
+        (((Math.toDegrees(
+            Math.atan2((last.y - c.y).toDouble(), (last.x - c.x).toDouble())
+        ))).let { if (it < 0) it + 360 else it }).toFloat()
+    }
+
+    /**
+     * Finds the FIRST speed valley that has fast approach walls —
+     * mirroring the gate's detector discipline (120 ms window, min
+     * 8 ms span, approach must be fast so touch-down pauses and
+     * end-rest plateaus can't masquerade as bends) — and, like the
+     * gate's idempotent arm, the first qualifying valley owns the
+     * result. Runs once per record at display time.
      */
     private fun findBend(): Pair<Long, Float>? {
         val s = _samples
-        if (s.size < 3) return null
-        var bestT: Long? = null
-        var bestSpeed = Float.MAX_VALUE
-        for (i in 1 until s.size) {
-            // Oldest sample still within the 40 ms window.
+        val n = s.size
+        if (n < 3) return null
+
+        // Per-sample speed over the trailing BEND_SPAN_MS — the SAME
+        // measure the gate uses (engine BEND_SPAN_MS = 40), so logged
+        // bend times align with gate arming. -1 = span too short.
+        val speed = FloatArray(n) { -1f }
+        for (i in 1 until n) {
             var j = i
-            val tNow = s[i].t
-            while (j > 0 && tNow - s[j - 1].t <= BEND_WINDOW_MS) j--
-            val dt = tNow - s[j].t
-            if (dt < BEND_MIN_SPAN_MS) continue      // window too short to judge
-            val dx = s[i].x - s[j].x
-            val dy = s[i].y - s[j].y
-            val speed = hypot(dx, dy) / dt
-            if (speed < bestSpeed) {
-                bestSpeed = speed
-                bestT = s[i].t
+            while (j > 0 && s[i].t - s[j - 1].t <= BEND_SPAN_MS) j--
+            val dt = s[i].t - s[j].t
+            if (dt >= BEND_MIN_SPAN_MS) {
+                speed[i] = kotlin.math.hypot(
+                    (s[i].x - s[j].x).toDouble(), (s[i].y - s[j].y).toDouble()
+                ).toFloat() / dt
             }
         }
-        return bestT?.let { it to bestSpeed }
+
+        // First local minimum with a fast approach. The FINAL sample is
+        // eligible with a one-sided test (nothing after lift can refute
+        // it) — fixes the "qualified 1 ms before finger-up" blind spot.
+        for (i in 2 until n) {
+            if (speed[i] < 0f || speed[i - 1] < 0f) continue
+            val nextOk = (i == n - 1) || (speed[i + 1] >= 0f && speed[i] <= speed[i + 1])
+            if (!nextOk || speed[i] > speed[i - 1]) continue
+            var approach = 0f
+            for (j in i - 1 downTo 0) {
+                if (s[i].t - s[j].t > BEND_WINDOW_MS) break
+                if (speed[j] > approach) approach = speed[j]
+            }
+            if (approach < BEND_APPROACH_WALL_PX_PER_MS) continue
+            return s[i].t to speed[i]
+        }
+        return null
     }
 
     companion object {
-        private const val BEND_WINDOW_MS = 40L
+        /** Search window for valley + wall (ms). */
+        private const val BEND_WINDOW_MS = 120L
+        /** Speed-measurement span — matches the engine's BEND_SPAN_MS. */
+        private const val BEND_SPAN_MS = 40L
         private const val BEND_MIN_SPAN_MS = 8L
+        private const val BEND_APPROACH_WALL_PX_PER_MS = 0.4f
     }
 }
 
@@ -214,7 +299,7 @@ class GestureLogger : BenchObserver {
         onTrialComplete?.invoke(rec)
     }
 
-    override fun onCommit(ring: Ring, segment: Int, t: Long) {
+        override fun onCommit(ring: Ring, segment: Int, t: Long) {
         val rec = current ?: return
         current = null
         rec.committed = if (ring == Ring.NONE) null else Pair(ring, segment)
@@ -246,6 +331,27 @@ class GestureLogger : BenchObserver {
             }
         }
         rec.movementTimeMs = rec._samples.firstOrNull()?.let { t - it.t } ?: 0L
+
+        // ── Per-trial bend diagnostics (temporary) ─────────────────
+        // bendSpeedPxPerMs is PX/ms: divide by device density on paper
+        // to compare against the ceiling (dp/ms). Interpolation only —
+        // the "%.…f" class of bug that crashed us at sub-50 ms dwell
+        // cannot occur here.
+        Log.d(
+            "GestureLogger",
+            "trial ${rec.outcome}" +
+                " target=(level=${rec.target.level},ring=${rec.target.ring},seg=${rec.target.segment})" +
+                " missedBy=[${MissAspect.describe(rec.missedBy)}]" +
+                " bendPxPerMs=${rec.bendSpeedPxPerMs ?: "none"}" +
+                " bendAge=${rec.bendTimeMs?.let { t - it } ?: "none"}ms" +
+                " restR=${rec.landingRestRadiusPx ?: -1f}px openR=${rec.landingOpenRadiusPx ?: -1f}px" +
+                " drift=${rec.openToRestDriftPx ?: -1f}px ang=${rec.landingAngleDeg ?: -1f}" +
+                (if (rec.bendTimeMs != null) {
+                    // Lag bend→menu-open, the tuning metric
+                    " dwellLag=${rec.dwellLagMs ?: "no-open"}ms"
+                } else "")
+        )
+
         onTrialComplete?.invoke(rec)
     }
 }

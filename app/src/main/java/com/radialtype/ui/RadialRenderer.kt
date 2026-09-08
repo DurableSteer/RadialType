@@ -181,8 +181,7 @@ class RadialRenderer(
         refreshFeelFromSettings()
         if (SettingsManager.isInitialized) {
             deadZoneRadius = SettingsManager.deadzoneRadius
-            val padding = SettingsManager.innerPaddingDp
-            innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f) + padding
+            innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
             outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
             reachProfile = SettingsManager.reachProfile.copyOf()
         }
@@ -303,16 +302,6 @@ class RadialRenderer(
                 sectorColor(accent, data.ring == Ring.INNER && data.segment == seg))
             drawAnnularSlice(canvas, cx, cy, innerRadiusMax, outerRadiusMax, seg,
                 sectorColor(accent, data.ring == Ring.OUTER && data.segment == seg))
-        }
-        
-        // Angle-lock corridor: whisper tint over the whole locked
-        // column so the pin is visible before any drift is felt.
-        if (data.lockedSegment in 0 until 8) {
-            val tint = 0x14000000.toInt() or (accent and 0x00FFFFFF)
-            drawAnnularSlice(canvas, cx, cy, deadZoneRadius, innerRadiusMax,
-                data.lockedSegment, tint)
-            drawAnnularSlice(canvas, cx, cy, innerRadiusMax, outerRadiusMax,
-                data.lockedSegment, tint)
         }
 
         // Structure: one profile-following outline per ring boundary —

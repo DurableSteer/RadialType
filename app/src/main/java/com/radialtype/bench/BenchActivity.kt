@@ -593,7 +593,6 @@ internal class BenchSurfaceView(
             label = selectionTracker.currentLabel(),
             labelX = fsm.currentX,
             labelY = fsm.currentY,
-            lockedSegment = fsm.lockedSegment,
             mode = fsm.activeMode
         )
         invalidate()

@@ -61,8 +61,12 @@ class TouchStateMachine(
 
     companion object {
         private const val TAG = "TouchStateMachine"
-
-        const val SEGMENT_SUPPRESSION_MS = 50L
+        
+        /** A valley also counts as intent when it dips below this
+         *  fraction of the window's PEAK speed — catches rounded,
+         *  high-speed 90° corners whose absolute apex stays above
+         *  the stillness ceiling. */
+        const val BEND_REL_DIP_RATIO = 0.35f
 
         /** Default dwell duration before PRIMARY → SECONDARY. */
         const val DEFAULT_DWELL_MS = 125L
@@ -83,6 +87,32 @@ class TouchStateMachine(
          *  this wall-clock window of the timer maturing. Covers batching
          *  overlap; a parked finger goes stale instantly and is allowed. */
         const val DWELL_GATE_FIRE_GRACE_MS = 50L
+        
+        /** Look-back window (ms) for the bend (speed-minimum) detector.
+         *  Must fit inside MotionHistory's retained span (~130–260 ms
+         *  at default capacity). */
+        const val BEND_WINDOW_MS = 120L
+        
+        /** BEND-mode fire-time retry: how long to wait for a qualifying valley
+         *  before re-checking, after a fire arrived without an armed bend. Three
+         *  probe cycles — the log shows qualification typically crosses within
+         *  one probe of a cancelled fire. */
+        private const val BEND_ARM_RETRY_MS = 48L
+        
+        /** Failed fire-time probes tolerated before the dip ratio
+         *  relaxes (tier 2). Move-side probes ALWAYS stay tier 1. */
+        private const val BEND_RELAX_AFTER_RETRIES = 2
+
+        /** Tier-2 (relaxed) relative dip ratio. Tier 2 additionally
+         *  requires the finger to have a resolved ring — fires from
+         *  the deadzone never qualify relaxed. */
+        const val BEND_REL_DIP_RATIO_RELAXED = 0.50f
+        
+        /** Fallback projection horizon (ms) when settings unavailable. */
+        const val RADPROJ_HORIZON_DEFAULT = 40
+
+        /** Fallback projection cap (dp) when settings unavailable. */
+        const val RADPROJ_SHIFT_DEFAULT = 12f
 
         /** Exit speeds below this (dp/ms) skip the velocity term — parked-finger exits use pure position. */
         const val MIN_EXIT_SPEED_DP_PER_MS = 0.05f
@@ -167,8 +197,6 @@ class TouchStateMachine(
 
     var previousSegment: Int = -1
         private set
-
-    private var lastRingChangeTime: Long = 0L
     
     /**
      * Wall-clock (uptime) stamp of the last MOVE sample whose speed was
@@ -179,6 +207,19 @@ class TouchStateMachine(
      * indefinitely, re-blocking every dwell fire (the 400–500 ms lag).
      */
     private var lastFastMoveWallMs = 0L
+    
+    /**
+     * Timestamp of the speed-minimum the dwell timer is currently
+     * armed against (bend/hybrid gate modes). 0 = no bend this
+     * gesture. Event-clock based, like the samples it comes from.
+     */
+    private var lastArmedBendTimeMs = 0L
+    
+    /** Consecutive tier-1 fire probes that failed to find a qualifying
+     *  bend. ≥ BEND_RELAX_AFTER_RETRIES switches fire-time probes to
+     *  the relaxed dip ratio. Reset on arm, DOWN, and reset(). */
+    private var bendFireRetryCount = 0
+    
 
     /** Pointer that owns the gesture, captured on ACTION_DOWN. */
     var activePointerId: Int = MotionEvent.INVALID_POINTER_ID
@@ -188,7 +229,7 @@ class TouchStateMachine(
      * Recent touch samples for the onset-weighted exit angle. Reset on
      * ACTION_DOWN, appended on every handled move. Zero cost when idle.
      */
-    private val motionHistory = MotionHistory()
+    private val motionHistory = MotionHistory(capacity = 24)
 
     var secondaryAnchorX: Float = 0f
         private set
@@ -276,6 +317,16 @@ class TouchStateMachine(
     var onDeleteCancelled: (() -> Unit)? = null
 
     // ── Public API ───────────────────────────────────────────────
+    
+    /**
+     * Clears cell-signalling bookkeeping; the next populated cell
+     * re-signals. Called at every context boundary: state entries,
+     * ACTION_DOWN, and deadzone entry.
+     */
+    private fun resetSignaledCell() {
+        signaledRing = Ring.NONE
+        signaledSegment = -1
+    }
 
     fun refreshFromSettings() {
         geometryEngine.refreshFromSettings()
@@ -284,18 +335,6 @@ class TouchStateMachine(
         // Dwell gate ceiling rides the same live-pull path; nothing to
         // cache — fingerSpeed / dwellGateMaxSpeed read settings on demand.
     }
-    
-     /**
-     * Post-ring-change segment suppression window (ms). Read live from
-     * [SettingsManager] so it's tunable without recreating the FSM;
-     * falls back to the compiled default when settings are unavailable.
-     */
-    private fun suppressionWindowMs(): Long =
-        if (SettingsManager.isInitialized) {
-            SettingsManager.suppressionWindowMs.toLong()
-        } else {
-            SEGMENT_SUPPRESSION_MS
-        }
     
      /**
      * Aborts any in-flight gesture and returns to IDLE. Used when the
@@ -323,6 +362,7 @@ class TouchStateMachine(
         lastUpInDeadzone = false
         modeGraceActive = false
         modeGraceDeadline = 0L
+        bendFireRetryCount = 0
         cursorColumns = 0
         cursorLines = 0
         resetSignaledCell()
@@ -339,9 +379,9 @@ class TouchStateMachine(
             // fall through to the `else -> false` path, or the system may
             // stop delivering MOVE events for the tracked pointer.
             MotionEvent.ACTION_POINTER_DOWN -> true
-            MotionEvent.ACTION_MOVE   -> {
-                val idx = event.findPointerIndex(activePointerId)
-                if (idx >= 0) handleMove(event, idx) else true
+            MotionEvent.ACTION_MOVE -> {
+                val pointerIndex = event.findPointerIndex(activePointerId)
+                if (pointerIndex >= 0) handleMove(event, pointerIndex) else true
             }
             // First finger lifting while a second is still down: end the
             // gesture here; subsequent events until full release are ignored.
@@ -367,37 +407,74 @@ class TouchStateMachine(
             Log.w(TAG, "enterSecondary() called in $state — ignoring")
             return
         }
-        if (currentRing == Ring.NONE) {
-            Log.d(TAG, "enterSecondary() suppressed — finger in deadzone (ring=NONE)")
+        if (currentRing == Ring.NONE || currentSegment < 0) {
+            val armed = dwellGateEnabled() &&
+                (gateMode() == SettingsManager.GATE_MODE_BEND ||
+                 gateMode() == SettingsManager.GATE_MODE_HYBRID) &&
+                lastArmedBendTimeMs != 0L
+            if (armed) {
+                // An armed bend's fire matured while the finger was in the
+                // deadzone or before a segment resolved. Dropping it strands
+                // the arm: cell entry respects the arm and never restarts
+                // the clock, so the menu would never open this gesture.
+                // Retry briefly — by the next probe the finger is almost
+                // always out of the deadzone with a segment.
+                Log.d(TAG, "Armed fire held in deadzone — retrying in " +
+                      "${BEND_ARM_RETRY_MS}ms")
+                dwellTimer.cancel()
+                dwellTimer.start(BEND_ARM_RETRY_MS)
+            } else {
+                Log.d(TAG, "enterSecondary() suppressed — " +
+                    if (currentRing == Ring.NONE) "finger in deadzone (ring=NONE)"
+                    else "no segment resolved yet")
+            }
             return
         }
-        if (currentSegment < 0) {
-            Log.d(TAG, "enterSecondary() suppressed — no segment resolved yet")
-            return
-        }
-        // ── Dwell stillness gate: fire-time double-check ─────────────
+        // ── Dwell gate, fire-time check (mode-aware) ─────────────────
         if (dwellGateEnabled()) {
-            val sinceFastMs = SystemClock.uptimeMillis() - lastFastMoveWallMs
-            if (lastFastMoveWallMs != 0L && sinceFastMs < DWELL_GATE_FIRE_GRACE_MS) {
-                Log.d(TAG, "Dwell gate blocked fire — fast move %.0f ms ago"
-                    .format(sinceFastMs))
-                dwellTimer.start()
-                return
+            when (gateMode()) {
+               SettingsManager.GATE_MODE_BEND -> {
+                    if (lastArmedBendTimeMs == 0L && !tryBackstopArm("Bend")) {
+                        bendFireRetryCount++
+                        Log.d(TAG, "Bend gate: fire without armed bend — retrying in " +
+                              "${BEND_ARM_RETRY_MS}ms (attempt ${bendFireRetryCount}," +
+                              if (bendFireRetryCount >= BEND_RELAX_AFTER_RETRIES)
+                                  " tier=relaxed)" else " tier=strict)")
+                        dwellTimer.cancel()
+                        dwellTimer.start(BEND_ARM_RETRY_MS)
+                        return
+                    }
+                    // Armed bend (early, backstop, or retry) → fire.
+                }
+                SettingsManager.GATE_MODE_HYBRID -> {
+                    if (lastArmedBendTimeMs == 0L) tryBackstopArm("Hybrid")
+                    if (lastArmedBendTimeMs == 0L) {
+                        val sinceFastMs = SystemClock.uptimeMillis() - lastFastMoveWallMs
+                        if (lastFastMoveWallMs != 0L && sinceFastMs < DWELL_GATE_FIRE_GRACE_MS) {
+                            Log.d(TAG, "Hybrid gate blocked fire — fast move $sinceFastMs ms ago, no bend")
+                            dwellTimer.start(dwellDurationMs)
+                            return
+                        }
+                    }
+                }
+                else -> {
+                    val sinceFastMs = SystemClock.uptimeMillis() - lastFastMoveWallMs
+                    if (lastFastMoveWallMs != 0L && sinceFastMs < DWELL_GATE_FIRE_GRACE_MS) {
+                        Log.d(TAG, "Dwell gate blocked fire — fast move $sinceFastMs ms ago")
+                        dwellTimer.start(dwellDurationMs)
+                        return
+                    }
+                }
             }
         }
         secondaryAnchorX = currentX
         secondaryAnchorY = currentY
         benchObserver?.onAnchorUpdate(currentX, currentY, true, currentEventTime)
-        lastRingChangeTime = 0L
         resetSignaledCell()
-        // Menu is open; the dwell timer has no further job this gesture.
-        // Without this cancel it keeps re-arming and re-calling this
-        // function, which the state guard ignores but logs (and would
-        // eventually catch if the FSM ever bounced states).
         dwellTimer.cancel()
         transitionTo(TouchState.SECONDARY)
     }
-
+    
     private fun startDelete() {
         dwellTimer.cancel()
         currentRing = Ring.NONE
@@ -406,7 +483,6 @@ class TouchStateMachine(
         previousSegment = -1
         deleteLeftCount = 0
         deleteRightCount = 0
-        lastRingChangeTime = 0L
         activeMode = LayoutMode.LETTERS
         resetSignaledCell()
         transitionTo(TouchState.DELETE)
@@ -421,7 +497,6 @@ class TouchStateMachine(
         previousSegment = -1
         deleteLeftCount = 0
         deleteRightCount = 0
-        lastRingChangeTime = 0L
         activeMode = mode
         resetSignaledCell()
 
@@ -433,29 +508,6 @@ class TouchStateMachine(
             if (mode == LayoutMode.NUMBERS) TouchState.NUMBER else TouchState.SYMBOL
         )
     }
-    
-    /**
-     * Clears cell-signalling bookkeeping AND the angle lock; the next
-     * populated cell re-signals and re-locks. Called at every context
-     * boundary: state entries, ACTION_DOWN, and deadzone entry.
-     */
-    private fun resetSignaledCell() {
-        signaledRing = Ring.NONE
-        signaledSegment = -1
-        lockedSegment = -1
-    }
-    
-    /**
-     * Angle-lock state: the pinned segment of the current excursion,
-     * or −1 when unlocked (new gesture, finger in deadzone, or inside
-     * the secondary menu). Only meaningful when the setting is on.
-     */
-    var lockedSegment: Int = -1
-        private set
-
-    private fun angleLockEnabled(): Boolean =
-        if (SettingsManager.isInitialized) SettingsManager.angleLockEnabled
-        else false
 
     // ── Handlers ─────────────────────────────────────────────────
 
@@ -468,6 +520,8 @@ class TouchStateMachine(
         currentEventTime = event.eventTime
         motionHistory.reset()
         motionHistory.add(event.x, event.y, event.eventTime)
+        lastArmedBendTimeMs = 0L
+        bendFireRetryCount = 0
         benchObserver?.onGestureStart(event.x, event.y, event.eventTime)
 
         // Arming rule A: previous gesture ended in the deadzone and this
@@ -493,7 +547,6 @@ class TouchStateMachine(
             previousSegment = -1
             deleteLeftCount = 0
             deleteRightCount = 0
-            lastRingChangeTime = 0L
             resetSignaledCell()
             transitionTo(TouchState.AXIS_PENDING)
             return true
@@ -509,7 +562,6 @@ class TouchStateMachine(
         currentSegment = -1
         previousRing = Ring.NONE
         previousSegment = -1
-        lastRingChangeTime = 0L
         activeMode = LayoutMode.LETTERS
         resetSignaledCell()
 
@@ -518,6 +570,25 @@ class TouchStateMachine(
     }
 
     private fun handleMove(event: MotionEvent, pointerIndex: Int): Boolean {
+        // Drain batched/coalesced sub-samples FIRST — the deceleration
+        // tail of a flick lives here, not in the merged "current"
+        // position. Order matters: historical samples precede the
+        // current one chronologically.
+        //
+        // ARG ORDER TRAP: getHistoricalX/Y(int pos, int pointerIndex) —
+        // history position FIRST, pointer index SECOND (unlike getX,
+        // which takes only the pointer index). Swapping them reads
+        // "history sample #h" as "finger #h" and crashes on the first
+        // batched event, since a lone finger has only index 0.
+        val historySize = event.historySize
+        for (h in 0 until historySize) {
+            val hx = event.getHistoricalX(pointerIndex, h)
+            val hy = event.getHistoricalY(pointerIndex, h)
+            val ht = event.getHistoricalEventTime(h)
+            motionHistory.add(hx, hy, ht)
+            benchObserver?.onSample(hx, hy, ht)
+        }
+
         currentX = event.getX(pointerIndex)
         currentY = event.getY(pointerIndex)
         currentEventTime = event.eventTime
@@ -535,15 +606,6 @@ class TouchStateMachine(
             TouchState.IDLE         -> { /* spurious MOVE with no DOWN — ignore */ }
         }
 
-        // ── Dwell stillness gate ─────────────────────────────────────
-        // Runs after resolution so the gate reacts to the freshest possible
-        // velocity sample. While the finger is moving faster than the
-        // ceiling, the dwell clock RESTARTS on every move — so fast flicks
-        // never accumulate dwell time, only a parked finger does. Applied
-        // per state so gating tracks the same menu the finger is navigating:
-        // in PRIMARY this defers the menu open; in SECONDARY it re-anchors
-        // the gate check only (the secondary menu is dwell-immune, so no
-        // timer action is needed there).
         if (state == TouchState.PRIMARY || state == TouchState.SECONDARY) {
             applyDwellStillnessGate()
         }
@@ -764,7 +826,6 @@ class TouchStateMachine(
         currentSegment = -1
         previousRing = Ring.NONE
         previousSegment = -1
-        lastRingChangeTime = 0L
         activeMode = LayoutMode.LETTERS
         resetSignaledCell()
         transitionTo(TouchState.CURSOR)
@@ -777,102 +838,123 @@ class TouchStateMachine(
      * overshoot beyond the outer edge clamps to OUTER.
      *
      * @param final true when resolving the gesture-ending position on
-     *              ACTION_UP. The post-ring-change suppression window is
-     *              skipped: the last classification before the lift must
-     *              always yield a committed segment, even when the ring
-     *              change and the lift happened within the same
-     *              [SEGMENT_SUPPRESSION_MS] window (micro-flick case).
+     *              ACTION_UP — enables the radial exit projection so
+     *              the last classification before the lift always
+     *              yields a committed segment, even for a micro-flick
+     *              whose final sample hadn't crossed yet.
      */
-     private fun resolveGeometry(anchorX: Float, anchorY: Float, final: Boolean = false) {
-          val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
-          val distDp = GeometryEngine.pxToDp(distPx, density)
-          val posAngleDeg = geometryEngine.angle(anchorX, anchorY, currentX, currentY)
+    private fun resolveGeometry(anchorX: Float, anchorY: Float, final: Boolean = false) {
+        val distPx = geometryEngine.distance(anchorX, anchorY, currentX, currentY)
+        val distDp = GeometryEngine.pxToDp(distPx, density)
+        val posAngleDeg = geometryEngine.angle(anchorX, anchorY, currentX, currentY)
 
-          // Exit detection BEFORE currentRing is mutated below.
-          val wasInDeadzone = currentRing == Ring.NONE
-          val newRing = geometryEngine.computeRing(distDp, posAngleDeg, currentRing)
+        // ── Radial exit projection (commit only) ────────────────────
+        // At lift the finger is still moving: the last sample reflects
+        // where the flick WAS, not where it was GOING. Project the
+        // radius along the radial velocity component so a long flick
+        // is credited where it was headed (outer) even though the
+        // final sample hadn't crossed yet — and an inward mover must
+        // genuinely retreat. Slow/parked fingers project nothing.
+        // Applied ONLY on the final (ACTION_UP) resolution: per-MOVE
+        // classification stays untouched so steering displays stay
+        // honest.
+        var classDistDp = distDp
+        if (final && radprojEnabled()) {
+            classDistDp = projectedCommitDistanceDp(anchorX, anchorY, distDp)
+        }
 
-          // ── Onset-weighted exit angle ─────────────────────────────────
-          // The FIRST angle resolved after leaving the deadzone decides the
-          // spoke — and it is the noisiest sample of the whole gesture
-          // (edge jitter, curved flicks, stale batched coordinates). Blend
-          // the positional bearing with the direction of travel over the
-          // last ONSET_VELOCITY_WINDOW_MS so launch curvature can't steal
-          // the spoke. Applies to deadzone exits in BOTH menus (shared
-          // resolution path), including re-aim after a deadzone visit.
-          // Slow/parked exits fall back to pure position.
-          var angleDeg = posAngleDeg
-          if (onsetEnabled() && newRing != Ring.NONE && wasInDeadzone) {
-              motionHistory.velocity(onsetVelocityWindowMs())?.let { v ->
-                  val speedDpPerMs = GeometryEngine.pxToDp(
-                      Math.hypot(v.first.toDouble(), v.second.toDouble()).toFloat(),
-                      density
-                  )
-                  if (speedDpPerMs >= onsetMinSpeedDpPerMs()) {
-                      val velAngleDeg = geometryEngine.angle(0f, 0f, v.first, v.second)
-                      angleDeg = MotionHistory.blendAngles(
-                          posAngleDeg, velAngleDeg, onsetPositionWeight()
-                      )
-                  }
-              }
-          }
+        // Exit detection BEFORE currentRing is mutated below.
+        val wasInDeadzone = currentRing == Ring.NONE
+        val newRing = geometryEngine.computeRing(classDistDp, posAngleDeg)
 
-          if (newRing != currentRing) {
-              previousRing = currentRing
-              currentRing = newRing
-              if (newRing == Ring.NONE) {
-                  // Entering the deadzone deselects everything — and any
-                  // cell the finger later re-enters must signal again. It
-                  // also releases the angle lock (deliberate re-aim).
-                  previousSegment = currentSegment
-                  currentSegment = -1
-                  resetSignaledCell()
-              }
-              lastRingChangeTime = currentEventTime
-              onRingChanged?.invoke(newRing)
-              benchObserver?.onRingChanged(previousRing, newRing, currentEventTime)
-              dwellTimer.reset()
-          }
+        // ── Onset-weighted exit angle ─────────────────────────────────
+        // The FIRST angle resolved after leaving the deadzone decides the
+        // spoke — and it is the noisiest sample of the whole gesture
+        // (edge jitter, curved flicks, stale batched coordinates). Blend
+        // the positional bearing with the direction of travel over the
+        // last ONSET_VELOCITY_WINDOW_MS so launch curvature can't steal
+        // the spoke. Kept specifically for large-deadzone users, where
+        // the blind flight before the first resolved sample is long
+        // enough for launch direction to matter; at small deadzones it
+        // is measurably neutral. Slow/parked exits fall back to pure
+        // position.
+        var angleDeg = posAngleDeg
+        if (onsetEnabled() && newRing != Ring.NONE && wasInDeadzone) {
+            motionHistory.velocity(onsetVelocityWindowMs())?.let { v ->
+                val speedDpPerMs = GeometryEngine.pxToDp(
+                    Math.hypot(v.first.toDouble(), v.second.toDouble()).toFloat(),
+                    density
+                )
+                if (speedDpPerMs >= onsetMinSpeedDpPerMs()) {
+                    val velAngleDeg = geometryEngine.angle(0f, 0f, v.first, v.second)
+                    angleDeg = MotionHistory.blendAngles(
+                        posAngleDeg, velAngleDeg, onsetPositionWeight()
+                    )
+                }
+            }
+        }
 
-          val rawSegment = geometryEngine.computeSegment(angleDeg, currentSegment)
+        if (newRing != currentRing) {
+            previousRing = currentRing
+            currentRing = newRing
+            if (newRing == Ring.NONE) {
+                // Entering the deadzone deselects everything — and any
+                // cell the finger later re-enters must signal again.
+                previousSegment = currentSegment
+                currentSegment = -1
+                resetSignaledCell()
+            }
+            onRingChanged?.invoke(newRing)
+            benchObserver?.onRingChanged(previousRing, newRing, currentEventTime)
+            // Geometry motion resets the dwell clock ONLY when no bend
+            // owns the scheduled fire. An armed bend must not be
+            // postponed by ring crossings that happen AFTER the valley —
+            // the late-open wrong-ring misses. (Classic stillness mode
+            // keeps the unconditional reset: motion restarting the
+            // stillness clock IS its semantics.)
+            if (state == TouchState.PRIMARY) maybeRestartDwellOnMotion()
+        }
 
-          // ── Angle lock ────────────────────────────────────────────
-          // First populated segment of an excursion is ADOPTED as the
-          // locked column; afterwards the finger is pinned to it. Escape
-          // routes: deadzone (cleared above), lift, or entering the
-          // secondary menu (resetSignaledCell in enterSecondary). Note the
-          // lock now adopts the ONSET-CORRECTED segment, which is the whole
-          // point: a bad first sample can no longer poison the entire pin.
-          var newSegment = rawSegment
-          if (angleLockEnabled() && newRing != Ring.NONE) {
-              if (lockedSegment < 0) {
-                  lockedSegment = rawSegment
-              } else {
-                  newSegment = lockedSegment
-              }
-          }
+        val newSegment = geometryEngine.computeSegment(angleDeg, currentSegment)
 
-          val timeSinceRingChange = currentEventTime - lastRingChangeTime
-          val suppressed = !final &&
-                currentSegment != -1 &&
-                timeSinceRingChange < suppressionWindowMs()
+        if (newRing != Ring.NONE && newSegment != currentSegment) {
+            previousSegment = currentSegment
+            currentSegment = newSegment
+            onSegmentChanged?.invoke(newSegment)
+            // Same arm-respecting rule as the ring-crossing reset above.
+            if (state == TouchState.PRIMARY) maybeRestartDwellOnMotion()
+        }
 
-          if (!suppressed && newRing != Ring.NONE && newSegment != currentSegment) {
-              previousSegment = currentSegment
-              currentSegment = newSegment
-              onSegmentChanged?.invoke(newSegment)
-              dwellTimer.reset()
-          }
-
-          if (currentRing != Ring.NONE && currentSegment != -1 &&
-              (currentRing != signaledRing || currentSegment != signaledSegment)
-          ) {
-              signaledRing = currentRing
-              signaledSegment = currentSegment
-              onCellChanged?.invoke(currentRing, currentSegment)
-          }
-      }
-      
+        if (currentRing != Ring.NONE && currentSegment != -1 &&
+            (currentRing != signaledRing || currentSegment != signaledSegment)
+        ) {
+            signaledRing = currentRing
+            signaledSegment = currentSegment
+            onCellChanged?.invoke(currentRing, currentSegment)
+        }
+    }
+    
+    /**
+     * Ring/segment crossings in PRIMARY traditionally restart the dwell
+     * clock (moving finger ⇒ not dwelling). In bend-driven gate modes
+     * that rule applies ONLY while unarmed: once a valley has armed the
+     * fire ([lastArmedBendTimeMs] != 0), the scheduled fire belongs to
+     * the bend, and crossing a ring boundary after the valley must not
+     * postpone it. Unarmed resets are kept for HYBRID's stillness leg
+     * and for the classic stillness mode, where they are the whole
+     * mechanism. Finger-up still tears everything down (handleUp).
+     */
+    private fun maybeRestartDwellOnMotion() {
+        if (dwellGateEnabled() &&
+            (gateMode() == SettingsManager.GATE_MODE_BEND ||
+             gateMode() == SettingsManager.GATE_MODE_HYBRID) &&
+            lastArmedBendTimeMs != 0L
+        ) {
+            return   // armed bend owns the fire — no reset
+        }
+        dwellTimer.reset()
+    }
+     
     private fun onsetEnabled(): Boolean =
         if (SettingsManager.isInitialized) SettingsManager.onsetExitAngleEnabled
         else true
@@ -888,7 +970,48 @@ class TouchStateMachine(
     private fun onsetMinSpeedDpPerMs(): Float =
         if (SettingsManager.isInitialized) SettingsManager.onsetMinSpeedDpPerMs
         else MIN_EXIT_SPEED_DP_PER_MS
+    
+        // ── Radial exit projection ───────────────────────────────────
+
+    private fun radprojEnabled(): Boolean =
+        if (SettingsManager.isInitialized) SettingsManager.radprojEnabled
+        else false
+
+    private fun radprojHorizonMs(): Int =
+        if (SettingsManager.isInitialized) SettingsManager.radprojHorizonMs
+        else RADPROJ_HORIZON_DEFAULT
+
+    private fun radprojMaxShiftDp(): Float =
+        if (SettingsManager.isInitialized) SettingsManager.radprojMaxShiftDp
+        else RADPROJ_SHIFT_DEFAULT
+
     /**
+     * PROJECTED anchored radius (dp) for the commit classification.
+     *
+     * Radial velocity = velocity vector (px/ms, trailing 40 ms window
+     * from MotionHistory — same estimator the gate and onset blend
+     * use) dotted with the unit vector anchor→finger. Sign follows
+     * the direction of travel, so inward motion projects inward.
+     * Unmeasurable velocity (parked, <2 samples, batched burst) or a
+     * finger sitting exactly on the anchor project nothing.
+     */
+    private fun projectedCommitDistanceDp(
+        anchorX: Float, anchorY: Float, distDp: Float
+    ): Float {
+        val v = motionHistory.velocity() ?: return distDp
+        val dxPx = currentX - anchorX
+        val dyPx = currentY - anchorY
+        val lenPx = Math.hypot(dxPx.toDouble(), dyPx.toDouble()).toFloat()
+        if (lenPx < 1f) return distDp      // at anchor: no direction defined
+        val urx = dxPx / lenPx
+        val ury = dyPx / lenPx
+        val radialVPxPerMs = v.first * urx + v.second * ury
+        val radialVDpPerMs = GeometryEngine.pxToDp(radialVPxPerMs, density)
+        return GeometryEngine.projectedRadiusDp(
+            distDp, radialVDpPerMs, radprojHorizonMs(), radprojMaxShiftDp()
+        )
+    }
+        /**
      * Dwell stillness gate, move-side. While the finger is moving faster
      * than the stillness ceiling, the dwell clock is restarted so a fast
      * flick can never accrue dwell time. Paired with the DOWN/UP cancels
@@ -898,23 +1021,59 @@ class TouchStateMachine(
      *   dwell timer proceeds        finger held still for dwellDurationMs
      *
      * In SECONDARY the menu is already open and dwell cannot fire again,
-     * so the gate is a no-op there — the check exists only to keep the
-     * velocity bookkeeping honest when a gesture later falls back to
-     * PRIMARY-anchored states (NUMBER/SYMBOL never dwell).
+     * so the gate is a no-op there.
      */
-    private var lastSpeedLogT = 0L
-
     private fun applyDwellStillnessGate() {
         if (state == TouchState.PRIMARY) {
             val speed = currentFingerSpeedDpPerMs()
-            if (speed >= dwellGateMaxSpeedDpPerMs()) {
-                // Still moving fast — stamp it and restart the countdown.
+            val fast = speed >= dwellGateMaxSpeedDpPerMs()
+            if (fast) {
                 lastDwellFireSpeedDpPerMs = speed
                 lastFastMoveWallMs = SystemClock.uptimeMillis()
-                dwellTimer.reset()
             }
-            // Slow-or-stopped: let the clock run. Frozen-buffer case needs
-            // no action — no event means no new motion, which IS stillness.
+            when (gateMode()) {
+                SettingsManager.GATE_MODE_BEND,
+                SettingsManager.GATE_MODE_HYBRID -> {
+                    // Idempotent arm: the FIRST qualifying valley owns the
+                    // scheduled fire. After the first arm, nothing here
+                    // touches the timer again.
+                    if (lastArmedBendTimeMs == 0L) {
+                        val bend = motionHistory.findBend(BEND_WINDOW_MS, SystemClock.uptimeMillis())
+                        if (bend != null) {
+                            val dipRatio = if (bend.peakSpeedPxPerMs > 0f)
+                                bend.speedPxPerMs / bend.peakSpeedPxPerMs else 1f
+                            val qualifies = bendQualifies(bend, BEND_REL_DIP_RATIO)  // move side: tier 1 always
+                            val ageMs = currentEventTime - bend.timeMs
+                            Log.d(TAG, "bend probe t=${bend.timeMs} ageMs=$ageMs" +
+                                  " minPx=${bend.speedPxPerMs} peakPx=${bend.peakSpeedPxPerMs}" +
+                                  " wallPx=${bend.approachSpeedPxPerMs}" +
+                                  " ratio=$dipRatio qualifies=$qualifies")
+                            if (qualifies) {
+                                lastArmedBendTimeMs = bend.timeMs
+                                bendFireRetryCount = 0
+                                dwellTimer.cancel()
+                                dwellTimer.start((dwellDurationMs - ageMs).coerceAtLeast(1L))
+                            }
+                        }
+                    }
+                    // Stillness leg (hybrid only) — UNARMED only. A flick
+                    // re-accelerates THROUGH its armed fire moment by
+                    // design; resetting here would wipe the bend-earned
+                    // schedule on the very next fast MOVE and re-impose the
+                    // "opens dwellMs after you stop" latency on every
+                    // flick gesture. The arm owns the clock from its
+                    // moment of qualification.
+                    if (gateMode() == SettingsManager.GATE_MODE_HYBRID &&
+                        fast && lastArmedBendTimeMs == 0L
+                    ) {
+                        dwellTimer.reset()
+                    }
+                }
+                else -> {
+                    // Classic stillness: fast motion restarts the clock.
+                    if (fast) dwellTimer.reset()
+                }
+            }
         }
     }
     
@@ -927,10 +1086,55 @@ class TouchStateMachine(
 
     private fun dwellGateEnabled(): Boolean =
         if (SettingsManager.isInitialized) SettingsManager.dwellGateEnabled else true
+    
+    private fun gateMode(): String =
+        if (SettingsManager.isInitialized) SettingsManager.dwellGateMode
+        else SettingsManager.GATE_MODE_STILLNESS
 
     private fun dwellGateMaxSpeedDpPerMs(): Float =
         if (SettingsManager.isInitialized) SettingsManager.dwellGateMaxSpeedDpPerMs
         else DWELL_GATE_MAX_SPEED
+    
+        /**
+     * Shared qualification test for a candidate bend. The approach
+     * wall is mandatory at every tier — never relaxed.
+     */
+    private fun bendQualifies(bend: Bend, relDipRatio: Float): Boolean {
+        val bendDpPerMs = GeometryEngine.pxToDp(bend.speedPxPerMs, density)
+        val peakDpPerMs = GeometryEngine.pxToDp(bend.peakSpeedPxPerMs, density)
+        val approachDpPerMs = GeometryEngine.pxToDp(bend.approachSpeedPxPerMs, density)
+        val dipRatio = if (peakDpPerMs > 0f) bendDpPerMs / peakDpPerMs else 1f
+        return approachDpPerMs >= dwellGateMaxSpeedDpPerMs() && (
+            bendDpPerMs < dwellGateMaxSpeedDpPerMs() ||
+            dipRatio <= relDipRatio
+        )
+    }
+
+    /**
+     * Fire-time backstop shared by BEND and HYBRID: probe for a late
+     * bend with virtual-arrest extension (parked fingers surface their
+     * deceleration tail as a valley), qualify at the current tier, and
+     * arm if it passes. Tier 2 (relaxed ratio) is refused while the
+     * finger sits in the deadzone. Returns true when armed.
+     */
+    private fun tryBackstopArm(tag: String): Boolean {
+        val nowMs = SystemClock.uptimeMillis()
+        val relaxed = bendFireRetryCount >= BEND_RELAX_AFTER_RETRIES
+        val tier = if (relaxed) BEND_REL_DIP_RATIO_RELAXED else BEND_REL_DIP_RATIO
+        val bend = motionHistory.findBend(BEND_WINDOW_MS, nowMs) ?: return false
+        if (relaxed && currentRing == Ring.NONE) {
+            Log.d(TAG, "$tag backstop: tier-2 candidate rejected — finger in deadzone")
+            return false
+        }
+        if (!bendQualifies(bend, tier)) return false
+        lastArmedBendTimeMs = bend.timeMs
+        bendFireRetryCount = 0
+        val ageMs = nowMs - bend.timeMs
+        Log.d(TAG, "$tag gate: backstop armed bend t=${bend.timeMs} ageMs=$ageMs" +
+              " tier=${if (relaxed) "relaxed" else "strict"}" +
+              " minPx=${bend.speedPxPerMs} wallPx=${bend.approachSpeedPxPerMs}")
+        return true
+    }
 
     /**
      * Displacement speed (dp/ms) of the finger over the trailing

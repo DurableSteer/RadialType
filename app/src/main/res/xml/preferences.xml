@@ -3,27 +3,58 @@
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
-    <PreferenceCategory android:title="Rendering">
+    <!-- ═══════════ Rendering & display ═══════════ -->
+
+    <PreferenceCategory android:title="Rendering &amp; display">
         <SwitchPreferenceCompat
             android:key="debug_mode"
             android:title="Debug mode"
             android:summary="Draw the radial menu overlay while typing"
             android:defaultValue="true" />
-    </PreferenceCategory>
-    
-    <SwitchPreferenceCompat
+
+        <SwitchPreferenceCompat
             android:key="perf_hud"
             android:title="Performance HUD"
             android:summary="Show fps, frame time, draw cost, input latency and event rate at the bottom"
             android:defaultValue="false" />
 
-    <PreferenceCategory android:title="Typing">
+        <SeekBarPreference
+            android:key="floating_label_offset"
+            android:title="Label offset (px)"
+            android:summary="Floating label height above the finger"
+            android:defaultValue="180"
+            app:min="60"
+            android:max="320"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="floating_font_size"
+            android:title="Label font size (sp)"
+            android:summary="Floating commit-label text size"
+            android:defaultValue="36"
+            app:min="12"
+            android:max="64"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="menu_font_size"
+            android:title="Menu cell font size (sp)"
+            android:summary="Ring cell label text size"
+            android:defaultValue="20"
+            app:min="10"
+            android:max="40"
+            app:showSeekBarValue="true" />
+    </PreferenceCategory>
+
+    <!-- ═══════════ Haptics ═══════════ -->
+
+    <PreferenceCategory android:title="Haptics">
         <SwitchPreferenceCompat
             android:key="haptic_feedback"
             android:title="Haptic feedback"
             android:summary="Master switch for all vibration pulses"
             android:defaultValue="true" />
-            
+
         <SeekBarPreference
             android:key="haptic_intensity"
             android:title="Haptic intensity"
@@ -40,7 +71,17 @@
             android:summary="Custom pulses, or crisp system effects where supported"
             android:entries="@array/haptic_style_names"
             android:entryValues="@array/haptic_style_values"
-            android:defaultValue="crisp"
+            android:defaultValue="system_click"
+            android:dependency="haptic_feedback" />
+
+        <SeekBarPreference
+            android:key="vibration_length"
+            android:title="Vibration length (ms)"
+            android:summary="Duration of each haptic pulse"
+            android:defaultValue="10"
+            app:min="1"
+            android:max="150"
+            app:showSeekBarValue="true"
             android:dependency="haptic_feedback" />
 
         <SeekBarPreference
@@ -80,7 +121,7 @@
             android:summary="Vibrate when moving from inner to outer ring on the secondary menu"
             android:defaultValue="false"
             android:dependency="haptic_feedback" />
-        
+
         <SwitchPreferenceCompat
             android:key="haptic_label_touch"
             android:title="Tick on cell entry"
@@ -94,46 +135,68 @@
             android:summary="Light click when dragging between the inner and outer ring"
             android:defaultValue="false"
             android:dependency="haptic_feedback" />
-        
+
         <SwitchPreferenceCompat
             android:key="haptic_delete_tick"
             android:title="Delete selection tick"
             android:summary="Brief pulse each time the delete arm passes a character"
             android:defaultValue="true" />
+    </PreferenceCategory>
 
-        <SeekBarPreference
-            android:key="vibration_length"
-            android:title="Vibration length (ms)"
-            android:summary="Duration of each haptic pulse"
-            android:defaultValue="10"
-            app:min="1"
-            android:max="150"
-            app:showSeekBarValue="true" />
+    <!-- ═══════════ Typing behaviour ═══════════ -->
 
+    <PreferenceCategory android:title="Typing behaviour">
         <SeekBarPreference
             android:key="dwell_duration"
             android:title="Dwell duration (ms)"
             android:summary="How long the finger must rest before the secondary syllable menu opens"
-            android:defaultValue="140"
+            android:defaultValue="90"
             app:min="1"
             android:max="800"
             app:showSeekBarValue="true" />
-        
+
         <SwitchPreferenceCompat
             android:key="dwell_gate_enabled"
             android:title="Dwell stillness gate"
             android:summary="The syllable menu opens only when the finger has actually stopped — fast flicks never trigger it"
             android:defaultValue="true" />
 
+        <ListPreference
+            android:key="dwell_gate_mode"
+            android:title="@string/dwell_gate_mode_title"
+            android:entries="@array/dwell_gate_mode_entries"
+            android:entryValues="@array/dwell_gate_mode_values"
+            android:defaultValue="hybrid"
+            android:summary="%s"
+            android:dependency="dwell_gate_enabled" />
+
         <SeekBarPreference
             android:key="dwell_gate_speed"
             android:title="Dwell speed ceiling"
             android:summary="Finger speeds above this restart the dwell clock (0.01–0.50 dp/ms; 3 ≈ a parked finger)"
-            android:defaultValue="15"
+            android:defaultValue="10"
             app:min="1"
             android:max="50"
             app:showSeekBarValue="true"
             android:dependency="dwell_gate_enabled" />
+
+        <SeekBarPreference
+            android:key="double_tap_deadzone"
+            android:title="Double-tap window (ms)"
+            android:summary="Max interval between deadzone taps that triggers delete mode"
+            android:defaultValue="150"
+            app:min="100"
+            android:max="600"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="mode_lock_grace"
+            android:title="Menu settle delay (ms)"
+            android:summary="After flicking to numbers/symbols, the menu follows the finger and ignores selection for this long"
+            android:defaultValue="80"
+            app:min="0"
+            android:max="300"
+            app:showSeekBarValue="true" />
 
         <SwitchPreferenceCompat
             android:key="auto_space"
@@ -147,35 +210,21 @@
             android:summary="Capitalize the first letter of sentences"
             android:defaultValue="true" />
     </PreferenceCategory>
-    
-    <PreferenceCategory android:title="Advanced — Feel tuning">
-        <SeekBarPreference
-            android:key="ring_hysteresis"
-            android:title="Ring hysteresis (dp)"
-            android:summary="Retained-ring deadband near ring boundaries"
-            android:defaultValue="0"
-            app:min="0"
-            android:max="160"
-            app:showSeekBarValue="true" />
-            
-        <SwitchPreferenceCompat
-            android:key="angle_lock"
-            android:title="Angle lock"
-            android:summary="Once a column is entered, sideways drift is ignored until you return to the centre or lift."
-            android:defaultValue="false" />
-        
+
+    <!-- ═══════════ Advanced — Launch feel ═══════════ -->
+
+    <PreferenceCategory android:title="Advanced — Launch feel">
         <SwitchPreferenceCompat
             android:key="onset_exit_angle"
             android:title="Launch-direction correction"
             android:summary="Blend the direction of travel into the angle that picks the column when leaving the centre — corrects curved flick launches"
-            android:defaultValue="true"
-            android:dependency="angle_lock" />
+            android:defaultValue="true" />
 
         <SeekBarPreference
             android:key="onset_position_weight"
             android:title="Launch blend — position weight (%)"
             android:summary="100 = pure finger position, 0 = pure travel direction; 60 balances both"
-            android:defaultValue="60"
+            android:defaultValue="30"
             app:min="0"
             android:max="100"
             app:showSeekBarValue="true"
@@ -201,62 +250,45 @@
             app:showSeekBarValue="true"
             android:dependency="onset_exit_angle" />
 
+        <SwitchPreferenceCompat
+            android:key="radproj_enabled"
+            android:title="Radial exit projection"
+            android:summary="Commits are credited where the flick was headed — long flicks stop undershooting, slow steering stays exact"
+            android:defaultValue="false" />
+
+        <SeekBarPreference
+            android:key="radproj_horizon"
+            android:title="Projection horizon"
+            android:summary="How far ahead of the finger to look at commit (0–120 ms)"
+            android:defaultValue="40"
+            app:min="0"
+            android:max="120"
+            app:showSeekBarValue="true"
+            android:dependency="radproj_enabled" />
+
+        <SeekBarPreference
+            android:key="radproj_max_shift"
+            android:title="Max projection shift"
+            android:summary="Cap on the projection (0–40 dp)"
+            android:defaultValue="12"
+            app:min="0"
+            android:max="40"
+            app:showSeekBarValue="true"
+            android:dependency="radproj_enabled" />
+
         <SeekBarPreference
             android:key="segment_hysteresis"
             android:title="Segment hysteresis (degrees)"
             android:summary="Angular deadzone around segment boundaries (2.0° default)"
-            android:defaultValue="50"
+            android:defaultValue="20"
             app:min="0"
             android:max="50"
             app:showSeekBarValue="true" />
-        
-        <SeekBarPreference
-            android:key="suppression_window"
-            android:title="Suppression window (ms)"
-            android:summary="Segment updates paused after a ring transition (50 ms default)"
-            android:defaultValue="30"
-            app:min="0"
-            android:max="200"
-            app:showSeekBarValue="true" />
-
-        <SeekBarPreference
-            android:key="floating_label_offset"
-            android:title="Label offset (px)"
-            android:summary="Floating label height above the finger"
-            android:defaultValue="180"
-            app:min="60"
-            android:max="320"
-            app:showSeekBarValue="true" />
-
-        <SeekBarPreference
-            android:key="floating_font_size"
-            android:title="Label font size (sp)"
-            android:summary="Floating commit-label text size"
-            android:defaultValue="36"
-            app:min="12"
-            android:max="64"
-            app:showSeekBarValue="true" />
-
-        <SeekBarPreference
-            android:key="menu_font_size"
-            android:title="Menu cell font size (sp)"
-            android:summary="Ring cell label text size"
-            android:defaultValue="20"
-            app:min="10"
-            android:max="64"
-            app:showSeekBarValue="true" />
     </PreferenceCategory>
 
-    <PreferenceCategory android:title="Delete and Cursor">
-        <SeekBarPreference
-            android:key="double_tap_deadzone"
-            android:title="Double-tap window (ms)"
-            android:summary="Max interval between deadzone taps that triggers delete mode"
-            android:defaultValue="150"
-            app:min="100"
-            android:max="600"
-            app:showSeekBarValue="true" />
+    <!-- ═══════════ Delete &amp; cursor ═══════════ -->
 
+    <PreferenceCategory android:title="Delete &amp; cursor">
         <SeekBarPreference
             android:key="delete_chars_per_mm"
             android:title="Characters per mm (delete)"
@@ -265,16 +297,14 @@
             app:min="1"
             android:max="100"
             app:showSeekBarValue="true" />
-            
+
         <SeekBarPreference
-            android:key="mode_lock_grace"
-            android:title="Menu settle delay (ms)"
-            android:summary="After flicking to numbers/symbols, the menu follows the finger and ignores selection for this long"
-            android:defaultValue="80"
-            app:min="0"
-            android:max="300"
-            app:showSeekBarValue="true" />
-            
+            android:key="delete_deadzone"
+            android:title="Delete arm distance (dp)"
+            android:summary="Travel required before the delete selection begins"
+            android:defaultValue="6"
+            app:min="2" android:max="40" app:showSeekBarValue="true" />
+
         <SeekBarPreference
             android:key="cursor_sens_h"
             android:title="Cursor columns per mm"
@@ -293,18 +323,40 @@
             android:key="cursor_deadzone_radius"
             android:title="Cursor deadzone (dp)"
             android:summary="Neutral radius around the entry point before cursor movement begins"
-            android:defaultValue="20"
-            app:min="2" android:max="40" app:showSeekBarValue="true" />
-
-        <SeekBarPreference
-            android:key="delete_deadzone"
-            android:title="Delete arm distance (dp)"
-            android:summary="Travel required before the delete selection begins"
-            android:defaultValue="6"
+            android:defaultValue="12"
             app:min="2" android:max="40" app:showSeekBarValue="true" />
     </PreferenceCategory>
 
-    <PreferenceCategory android:title="Advanced — Ring geometry">
+    <!-- ═══════════ Ring geometry &amp; reach ═══════════ -->
+
+    <PreferenceCategory android:title="Ring geometry &amp; reach">
+        <SeekBarPreference
+            android:key="deadzone_radius"
+            android:title="Deadzone size (dp)"
+            android:summary="Radius of the centre zone where no character is selected"
+            android:defaultValue="18"
+            app:min="10"
+            android:max="60"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="inner_ring_radius"
+            android:title="Inner ring outer edge (dp)"
+            android:summary="Outside radius of the inner row — lowering it squishes the inner ring"
+            android:defaultValue="64"
+            app:min="40"
+            android:max="140"
+            app:showSeekBarValue="true" />
+
+        <SeekBarPreference
+            android:key="outer_ring_radius"
+            android:title="Outer ring outer edge (dp)"
+            android:summary="Outermost radius of the menu — lowering it squishes the outer row"
+            android:defaultValue="84"
+            app:min="80"
+            android:max="240"
+            app:showSeekBarValue="true" />
+
         <ListPreference
             android:key="hand_preset"
             android:title="Handedness preset"
@@ -331,14 +383,14 @@
             android:key="reach_2"
             android:title="Reach — South (%)"
             android:summary="Relative band extent toward south"
-            android:defaultValue="100"
+            android:defaultValue="90"
             app:min="50" android:max="100" app:showSeekBarValue="true" />
 
         <SeekBarPreference
             android:key="reach_3"
             android:title="Reach — Southwest (%)"
             android:summary="Relative band extent toward southwest"
-            android:defaultValue="95"
+            android:defaultValue="100"
             app:min="50" android:max="100" app:showSeekBarValue="true" />
 
         <SeekBarPreference
@@ -352,14 +404,14 @@
             android:key="reach_5"
             android:title="Reach — Northwest (%)"
             android:summary="Relative band extent toward northwest"
-            android:defaultValue="90"
+            android:defaultValue="80"
             app:min="50" android:max="100" app:showSeekBarValue="true" />
 
         <SeekBarPreference
             android:key="reach_6"
             android:title="Reach — North (%)"
             android:summary="Relative band extent toward north"
-            android:defaultValue="95"
+            android:defaultValue="90"
             app:min="50" android:max="100" app:showSeekBarValue="true" />
 
         <SeekBarPreference
@@ -368,45 +420,11 @@
             android:summary="Relative band extent toward northeast"
             android:defaultValue="100"
             app:min="50" android:max="100" app:showSeekBarValue="true" />
-            
-        <SeekBarPreference
-            android:key="deadzone_radius"
-            android:title="Deadzone size (dp)"
-            android:summary="Radius of the centre zone where no character is selected"
-            android:defaultValue="15"
-            app:min="5"
-            android:max="50"
-            app:showSeekBarValue="true" />
-
-        <SeekBarPreference
-            android:key="inner_ring_radius"
-            android:title="Inner ring outer edge (dp)"
-            android:summary="Outside radius of the inner row — lowering it squishes the inner ring"
-            android:defaultValue="57"
-            app:min="30"
-            android:max="100"
-            app:showSeekBarValue="true" />
-        
-        <SeekBarPreference
-            android:key="inner_padding"
-            android:title="Inner ring padding (dp)"
-            android:summary="Deepens the inner band so flicks aimed at inner cells don't spill into the outer ring"
-            android:defaultValue="0"
-            app:min="0"
-            android:max="20"
-            app:showSeekBarValue="true" />
-
-        <SeekBarPreference
-            android:key="outer_ring_radius"
-            android:title="Outer ring outer edge (dp)"
-            android:summary="Outermost radius of the menu — lowering it squishes the outer row"
-            android:defaultValue="90"
-            app:min="60"
-            android:max="200"
-            app:showSeekBarValue="true" />
     </PreferenceCategory>
 
-    <PreferenceCategory android:title="Language &amp; layout generation">
+    <!-- ═══════════ Language &amp; layout ═══════════ -->
+
+    <PreferenceCategory android:title="Language &amp; layout">
         <ListPreference
             android:key="language_primary"
             android:title="Primary language"
@@ -436,29 +454,32 @@
             android:key="regenerate_layout"
             android:title="Regenerate layout from languages"
             android:summary="Rebuild the frozen letter/syllable layout from the selected language packs. Warning: changes letter positions." />
-    </PreferenceCategory>
 
-    <PreferenceCategory android:title="Layout">
         <Preference
             android:key="open_layout_editor"
             android:title="Custom layout"
             android:summary="Edit ring characters and function keys (DEL, SHIFT, SPACE)" />
     </PreferenceCategory>
-    
+
+    <!-- ═══════════ Benchmark ═══════════ -->
+
     <PreferenceCategory android:title="Benchmark">
         <Preference
             android:key="open_benchmark"
             android:title="Flick accuracy benchmark"
             android:summary="Score your flicks cell-by-cell against the current settings" />
+
         <Preference
             android:key="open_bench_history"
             android:title="Session history &amp; comparison"
             android:summary="Saved runs, hit rates, per-cell A/B deltas" />
+
         <SwitchPreference
             android:key="bench_repeat_seed"
             android:title="Repeat same playlist"
             android:summary="Replays the last seed so A/B runs share an identical target order"
             android:defaultValue="false" />
+
         <ListPreference
             android:key="bench_trials_per_target"
             android:title="Session length"
@@ -467,6 +488,8 @@
             android:defaultValue="6"
             android:summary="%s flicks per cell" />
     </PreferenceCategory>
+
+    <!-- ═══════════ Activation ═══════════ -->
 
     <PreferenceCategory android:title="Activation">
         <Preference

@@ -86,8 +86,7 @@ object BenchStore {
                 "/${SettingsManager.onsetVelocityWindowMs}" +
                 "/${(SettingsManager.onsetMinSpeedDpPerMs * 100).toInt()})"
         else "off"
-        return "lock=${if (SettingsManager.angleLockEnabled) "on" else "off"} " +
-            "onset=$onset pad=${SettingsManager.innerPaddingDp.toInt()}dp"
+        return "onset=$onset"
     }
 
     private fun configSnapshot(): JSONObject = JSONObject().apply {
@@ -95,8 +94,6 @@ object BenchStore {
         val reach = JSONArray()
         SettingsManager.reachProfile.forEach { reach.put((it * 100).toInt()) }
         put("reach", reach)
-        put("innerPadding", SettingsManager.innerPaddingDp.toDouble())
-        put("angleLock", SettingsManager.angleLockEnabled)
         put("onsetEnabled", SettingsManager.onsetExitAngleEnabled)
         put("onsetPositionWeight", SettingsManager.onsetPositionWeight.toDouble())
         put("onsetWindowMs", SettingsManager.onsetVelocityWindowMs)
