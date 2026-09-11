@@ -42,12 +42,17 @@ enum class MissAspect(val label: String) {
 
 /**
  * Complete record of one benchmark trial: everything needed to draw
- * raw-vs-perceived later. Mutable during collection, handed over via
- * [GestureLogger.onTrialComplete] and treated as read-only afterwards.
+ * raw-vs-perceived later, plus (Package 0.1) the designated origin cell
+ * the gesture was supposed to launch from — the seed datum for
+ * "does approach direction predict landing bias?" analysis. Mutable
+ * during collection, handed over via [GestureLogger.onTrialComplete]
+ * and treated as read-only afterwards.
  */
 class TrialRecord(
     val target: BenchTarget,
     val displayTimeMs: Long,
+    /** Designated launch cell (always PRIMARY-level); null = unconstrained. */
+    val originCell: BenchTarget? = null,
     internal val _samples: MutableList<BenchSample> = mutableListOf(),
     internal val _events: MutableList<BenchEvent> = mutableListOf()
 ) {
@@ -121,8 +126,41 @@ class TrialRecord(
         } as? BenchEvent.StateTransition ?: return@lazy null
         trans.t - bt
     }
-    
+
     // ── Radial landing diagnostics ────────────────────────────────
+
+    val launchCell: Pair<Ring, Int>? by lazy {
+        val trans = _events.firstOrNull {
+            it is BenchEvent.StateTransition && it.to == TouchState.SECONDARY
+        } as? BenchEvent.StateTransition ?: return@lazy null
+        var ring = Ring.NONE
+        var seg = -1
+        for (e in _events) {
+            val et = when (e) {
+                is BenchEvent.RingChanged -> e.t
+                is BenchEvent.SegmentChanged -> e.t
+                else -> continue
+            }
+            if (et > trans.t) break
+            when (e) {
+                is BenchEvent.RingChanged -> ring = e.to
+                is BenchEvent.SegmentChanged -> seg = e.to
+                else -> {}
+            }
+        }
+        if (ring == Ring.NONE) null else Pair(ring, seg)
+    }
+
+    /**
+     * True when the gesture opened SECONDARY but never rested on a
+     * primary cell (dwell inside the deadzone) — the "leg 1 died at
+     * the plant" signature. Meaningless when the menu never opened.
+     */
+    val launchNotReached: Boolean by lazy {
+        launchCell == null && _events.any {
+            it is BenchEvent.StateTransition && it.to == TouchState.SECONDARY
+        }
+    }
 
     /**
      * Sample nearest in time to a timestamp. Records are small
@@ -257,8 +295,12 @@ class GestureLogger : BenchObserver {
 
     val trialInProgress: Boolean get() = current != null
 
-    fun beginTrial(target: BenchTarget, displayTimeMs: Long) {
-        current = TrialRecord(target, displayTimeMs)
+    fun beginTrial(
+        target: BenchTarget,
+        displayTimeMs: Long,
+        originCell: BenchTarget? = null
+    ) {
+        current = TrialRecord(target, displayTimeMs, originCell)
     }
 
     fun reset() {
@@ -299,7 +341,7 @@ class GestureLogger : BenchObserver {
         onTrialComplete?.invoke(rec)
     }
 
-        override fun onCommit(ring: Ring, segment: Int, t: Long) {
+    override fun onCommit(ring: Ring, segment: Int, t: Long) {
         val rec = current ?: return
         current = null
         rec.committed = if (ring == Ring.NONE) null else Pair(ring, segment)
@@ -313,44 +355,24 @@ class GestureLogger : BenchObserver {
             val onSecondaryMenu = rec.events.any {
                 it is BenchEvent.StateTransition && it.to == TouchState.SECONDARY
             }
-            val correctLevel =
-                (rec.target.level == TargetLevel.SECONDARY) == onSecondaryMenu
-            rec.outcome =
-                if (correctLevel && r == rec.target.ring && s == rec.target.segment)
-                    TrialOutcome.HIT
-                else TrialOutcome.MISS
-            // Diagnose WHICH dimensions failed so miss cards can say
-            // "menu · ring" instead of a bare compass direction that
-            // makes a miss look like a scoring bug.
-            if (rec.outcome == TrialOutcome.MISS) {
-                val aspects = mutableSetOf<MissAspect>()
-                if (!correctLevel) aspects.add(MissAspect.MENU)
-                if (r != rec.target.ring) aspects.add(MissAspect.RING)
-                if (s != rec.target.segment) aspects.add(MissAspect.SEGMENT)
-                rec.missedBy = aspects
-            }
-        }
-        rec.movementTimeMs = rec._samples.firstOrNull()?.let { t - it.t } ?: 0L
 
-        // ── Per-trial bend diagnostics (temporary) ─────────────────
-        // bendSpeedPxPerMs is PX/ms: divide by device density on paper
-        // to compare against the ceiling (dp/ms). Interpolation only —
-        // the "%.…f" class of bug that crashed us at sub-50 ms dwell
-        // cannot occur here.
-        Log.d(
-            "GestureLogger",
-            "trial ${rec.outcome}" +
-                " target=(level=${rec.target.level},ring=${rec.target.ring},seg=${rec.target.segment})" +
-                " missedBy=[${MissAspect.describe(rec.missedBy)}]" +
-                " bendPxPerMs=${rec.bendSpeedPxPerMs ?: "none"}" +
-                " bendAge=${rec.bendTimeMs?.let { t - it } ?: "none"}ms" +
-                " restR=${rec.landingRestRadiusPx ?: -1f}px openR=${rec.landingOpenRadiusPx ?: -1f}px" +
-                " drift=${rec.openToRestDriftPx ?: -1f}px ang=${rec.landingAngleDeg ?: -1f}" +
-                (if (rec.bendTimeMs != null) {
-                    // Lag bend→menu-open, the tuning metric
-                    " dwellLag=${rec.dwellLagMs ?: "no-open"}ms"
-                } else "")
-        )
+            val aspects = mutableSetOf<MissAspect>()
+            if (onSecondaryMenu != (rec.target.level == TargetLevel.SECONDARY)) {
+                aspects += MissAspect.MENU
+            }
+            if (r != rec.target.ring) aspects += MissAspect.RING
+            if (s != rec.target.segment) aspects += MissAspect.SEGMENT
+            rec.missedBy = aspects
+            rec.outcome =
+                if (aspects.isEmpty()) TrialOutcome.HIT else TrialOutcome.MISS
+        }
+
+        // Movement time: first sample → commit. Zero for aborted commits —
+        // an abort carries no usable timing signal.
+        val first = rec.samples.firstOrNull()
+        rec.movementTimeMs =
+            if (rec.outcome == TrialOutcome.ABORTED || first == null) 0L
+            else (t - first.t).coerceAtLeast(0L)
 
         onTrialComplete?.invoke(rec)
     }

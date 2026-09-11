@@ -18,8 +18,8 @@ import com.radialtype.settings.SettingsManager
  *   any refusal or missing view falls back to LEGACY rendering.
  *
  * Event catalogue: deadzoneExit, secondaryEnter, secondaryRingOut,
- * deleteTick (+ its progressive crescendo). Gating is per-event with the
- * master switch on top.
+ * deleteTick (+ its progressive crescendo), cursorTick. Gating is
+ * per-event with the master switch on top.
  */
 class HapticController(private val context: Context) {
 
@@ -95,7 +95,7 @@ class HapticController(private val context: Context) {
             HapticFeedbackConstants.CONFIRM          // firm, deliberate
         else -> HapticFeedbackConstants.VIRTUAL_KEY  // crisp, light
     }
-    
+
     private val amplitudeCapable: Boolean by lazy {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && (vibrator?.hasAmplitudeControl() == true)
     }
@@ -119,11 +119,6 @@ class HapticController(private val context: Context) {
         render(ringProfile(), systemConstant())
     }
 
-    fun pulseSecondaryRingOut() {
-        if (!SettingsManager.hapticSecondaryRingOut) return
-        render(ringProfile(), systemConstant())
-    }
-    
     /**
      * The finger entered a cell that has content — the "richer" navigation
      * tick. Rendered like the ring pulses (style-aware, intensity-scaled)
@@ -150,6 +145,20 @@ class HapticController(private val context: Context) {
         } else 0
         val amplitude = (base + step).coerceIn(1, MAX_AMPLITUDE)
         render(Profile(DELETE_TICK_MS, amplitude), systemConstant())
+    }
+
+    /**
+     * Cursor haptic parity (Package 0.4): one tick per net column or
+     * line crossing. Same amplitude source and duration as the delete
+     * tick — deliberately NO crescendo: the delete ratchet rises within
+     * one destructive gesture, while a cursor drag is positioning, so
+     * every tick reads as identical.
+     */
+    fun pulseCursorTick() {
+        if (!SettingsManager.hapticCursorTick) return
+        if (!SettingsManager.hapticsEnabled) return
+        render(Profile(DELETE_TICK_MS, SettingsManager.hapticTickIntensity),
+               systemConstant())
     }
 
     fun resetDeleteTicks() { tickStep = 0 }

@@ -195,36 +195,22 @@ class RadialKeyboardView(
                 inputDispatcher?.commit(label)
             }
         }
-        onRingChanged = { newRing ->
-            // Inside this .apply{} the FSM under construction is the receiver:
-            // `previousRing` and `state` are its live fields, already updated
-            // (previousRing = old ring) BEFORE this callback runs. Never qualify
-            // them with `touchStateMachine.` here — the property is still being
-            // initialized.
-            if (VERBOSE_LOG) Log.d(TAG, "Ring changed -> $newRing (prev=$previousRing)")
+        onPulseRingChanged = { oldRing, newRing ->
+            if (VERBOSE_LOG) Log.d(TAG, "Pulse ring: $oldRing → $newRing")
 
-            val oldRing = previousRing
-
-            // Deadzone exit: NONE → any ring
+            // Deadzone exit: NONE → any ring. With radial exit
+            // projection on, this leads the finger by at most the
+            // projection horizon — the pulse agrees with where the
+            // flick is credited at commit.
             if (oldRing == GeometryEngine.Ring.NONE && newRing != GeometryEngine.Ring.NONE) {
                 haptics.pulseDeadzoneExit()
             }
 
-            // Secondary inner → outer ring transition
-            if (state == TouchState.SECONDARY &&
-                oldRing == GeometryEngine.Ring.INNER &&
-                newRing == GeometryEngine.Ring.OUTER
-            ) {
-                haptics.pulseSecondaryRingOut()
-            }
-
-            // Ring-to-ring crossing (PRIMARY, NUMBER, SYMBOL): fires both
-            // directions — inner→outer and outer→inner. Excluded in SECONDARY
-            // where pulseSecondaryRingOut owns the radial transition.
-            if (state != TouchState.SECONDARY &&
-                oldRing != GeometryEngine.Ring.NONE &&
-                newRing != GeometryEngine.Ring.NONE
-            ) {
+            // Ring↔ring crossing — BOTH directions, ALL menus (PRIMARY,
+            // SECONDARY, NUMBER, SYMBOL). Single unified toggle
+            // (haptic_ring_cross); the old secondary-specific pulse was
+            // folded into this one.
+            if (oldRing != GeometryEngine.Ring.NONE && newRing != GeometryEngine.Ring.NONE) {
                 haptics.pulseRingCross()
             }
         }
@@ -283,15 +269,22 @@ class RadialKeyboardView(
             pushFrame()
         }
         onCursorMoveH = { cols ->
-            val delta = cols - lastCursorCols
-            lastCursorCols = cols
-            if (delta != 0) inputDispatcher?.moveCursorHorizontally(delta)
-            pushFrame()
-        }
+    val delta = cols - lastCursorCols
+    lastCursorCols = cols
+    Log.d("CursorDiag", "cols=$cols delta=$delta sens=${SettingsManager.cursorColumnsPerMm}")
+    if (delta != 0) {
+        inputDispatcher?.moveCursorHorizontally(delta)
+        haptics.pulseCursorTick()
+    }
+    pushFrame()
+}
         onCursorMoveV = { lines ->
             val delta = lines - lastCursorLines
             lastCursorLines = lines
-            if (delta != 0) inputDispatcher?.moveCursorVertically(delta)
+            if (delta != 0) {
+                inputDispatcher?.moveCursorVertically(delta)
+                haptics.pulseCursorTick()   // Package 0.4: one tick per line crossing
+            }
             pushFrame()
         }
     }

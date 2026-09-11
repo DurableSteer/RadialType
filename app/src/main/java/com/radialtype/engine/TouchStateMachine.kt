@@ -149,6 +149,16 @@ class TouchStateMachine(
 
         /** Fallback cursor vertical speed (tenths: 1.0 line/cm). */
         const val CURSOR_LINES_PER_CM_DEFAULT = 10
+        
+        /** Fallback abort-ease offset (dp) when SettingsManager is uninitialized. */
+        const val SECONDARY_ABORT_EASE_DEFAULT = 10f
+        
+        const val ABORT_EASE_RADIAL_FLOOR = 0.05f
+        
+        const val RATCHET_RELEASE_MULTIPLE = 2f
+        
+        /** Fallback characters-per-mm when SettingsManager is uninitialized. */
+        private const val DELETE_CHARS_PER_MM_FALLBACK = DELETE_CHARS_PER_MM_DEFAULT
     }
 
     val dwellTimer: DwellTimer = dwellTimerOverride
@@ -230,6 +240,47 @@ class TouchStateMachine(
      * ACTION_DOWN, appended on every handled move. Zero cost when idle.
      */
     private val motionHistory = MotionHistory(capacity = 24)
+    
+    // ── Directional ratchets (Package 0.9) ───────────────────────
+    // One ratchet for delete's horizontal axis; one per cursor axis
+    // (per-axis release: an L-shaped drag locks H and V independently,
+    // so horizontal reversal never fights an ongoing vertical move).
+    // Instances are REBUILT at each gesture start via the factories,
+    // so slider changes apply per gesture without mutable-threshold
+    // plumbing; the declaration-time values are placeholders.
+    private var deleteRatchet: AxisRatchet = newDeleteRatchet()
+    private var cursorRatchetH: AxisRatchet = newCursorRatchetH()
+    private var cursorRatchetV: AxisRatchet = newCursorRatchetV()
+
+    private fun newDeleteRatchet(): AxisRatchet {
+        val arm = if (SettingsManager.isInitialized) SettingsManager.deleteDeadzoneDp
+                  else DELETE_ARM_THRESHOLD_DP.toFloat()
+        val charsPerMm = if (SettingsManager.isInitialized) SettingsManager.deleteCharsPerMm
+                         else DELETE_CHARS_PER_MM_DEFAULT
+        return AxisRatchet(arm, arm * RATCHET_RELEASE_MULTIPLE,
+                           DP_PER_MM / charsPerMm.coerceAtLeast(0.01f))
+    }
+
+    private fun newCursorRatchetH(): AxisRatchet {
+        val arm = if (SettingsManager.isInitialized) SettingsManager.cursorDeadzoneDp
+                  else CURSOR_DEADZONE_DEFAULT
+        val stepDp = DP_PER_MM / cursorColumnsPerMm()
+        // Cursor release band = ONE STEP: suppresses intra-column
+        // boundary chatter (wobble < a step can't pay it back) while
+        // bounding the flip's snap debt to ~1 column, so a genuine
+        // reversal costs one position, not release-multiple × arm's
+        // worth of columns. Delete keeps the 2× arm band — its
+        // granularity is a character, not a position under the finger.
+        return AxisRatchet(arm, stepDp, stepDp)
+    }
+
+    private fun newCursorRatchetV(): AxisRatchet {
+        val arm = if (SettingsManager.isInitialized) SettingsManager.cursorDeadzoneDp
+                  else CURSOR_DEADZONE_DEFAULT
+        val stepDp = (DP_PER_MM * 10f) / cursorLinesPerCm()
+        // See newCursorRatchetH: one-step release, same rationale.
+        return AxisRatchet(arm, stepDp, stepDp)
+    }
 
     var secondaryAnchorX: Float = 0f
         private set
@@ -251,6 +302,29 @@ class TouchStateMachine(
     private fun modeGraceMs(): Int =
         if (SettingsManager.isInitialized) SettingsManager.modeLockGraceMs
         else MODE_GRACE_DEFAULT
+    
+    /**
+     * Deadzone radius active for the finger's current motion, dp.
+     *
+     * Secondary-menu abort ease (0.3, retreat-gated in 0.3b, togglable
+     * in 0.3c): while holding a cell in SECONDARY, an INWARD-moving
+     * finger meets the cancel boundary earlier — deadzone + ease —
+     * so pull-to-cancel stays forgiving. Outward/tangential/parked
+     * fingers are classified by the true boundary (see resolveGeometry's
+     * velocity gates; this value is the eased radius those gates use).
+     *
+     * When the master toggle is off, the eased radius collapses to the
+     * plain deadzone: the [resolveGeometry] band empties and everything
+     * degenerates to pure geometric classification.
+     */
+    private fun effectiveDeadzoneDp(): Float {
+        val base = if (SettingsManager.isInitialized) SettingsManager.deadzoneRadius
+           else 18f
+        if (state != TouchState.SECONDARY) return base
+        if (!SettingsManager.isInitialized ||
+            !SettingsManager.secondaryAbortEaseEnabled) return base
+        return base + SettingsManager.secondaryAbortEaseDp
+    }
         
     private fun cursorColumnsPerMm(): Float =
         if (SettingsManager.isInitialized) SettingsManager.cursorColumnsPerMm
@@ -280,6 +354,7 @@ class TouchStateMachine(
     var onPositionChanged: (() -> Unit)? = null
     var onCommit: (() -> Unit)? = null
     var onRingChanged: ((Ring) -> Unit)? = null
+    var onPulseRingChanged: ((Ring, Ring) -> Unit)? = null
     var onSegmentChanged: ((Int) -> Unit)? = null
 
     /**
@@ -301,6 +376,24 @@ class TouchStateMachine(
     /** Last cell passed to [onCellChanged]; NONE/-1 = nothing signaled. */
     private var signaledRing: Ring = Ring.NONE
     private var signaledSegment: Int = -1
+    /** Tracking ring that drives [onPulseRingChanged]. See its docs. */
+    private var pulseRing: Ring = Ring.NONE
+
+    /**
+     * Radial ordering of rings. NOTE: [Ring] enum's declaration order is
+     * INNER, OUTER, NONE — its .ordinal is NOT radial distance. Use this.
+     */
+    private fun rank(r: Ring): Int = when (r) {
+        Ring.NONE -> 0
+        Ring.INNER -> 1
+        Ring.OUTER -> 2
+    }
+
+    private fun ringAt(rank: Int): Ring = when (rank) {
+        2 -> Ring.OUTER
+        1 -> Ring.INNER
+        else -> Ring.NONE
+    }
 
     /** Fired during CURSOR drags: signed column displacement from anchor. */
     var onCursorMoveH: ((Int) -> Unit)? = null
@@ -326,6 +419,17 @@ class TouchStateMachine(
     private fun resetSignaledCell() {
         signaledRing = Ring.NONE
         signaledSegment = -1
+    }
+    
+    /**
+     * Clears pulse-ring bookkeeping (Package 0.4a). Called wherever
+     * [resetSignaledCell] fires: context boundaries and deadzone entry.
+     * Any outstanding projection debt is forgiven and the next genuine
+     * outward crossing pulses from scratch.
+     */
+    private fun resetPulseTracking() {
+        pulseRing = Ring.NONE
+        pulseLedByProjection = false
     }
 
     fun refreshFromSettings() {
@@ -365,7 +469,11 @@ class TouchStateMachine(
         bendFireRetryCount = 0
         cursorColumns = 0
         cursorLines = 0
+        deleteRatchet = newDeleteRatchet()
+        cursorRatchetH = newCursorRatchetH()
+        cursorRatchetV = newCursorRatchetV()
         resetSignaledCell()
+        resetPulseTracking()
         transitionTo(TouchState.IDLE)
     }
 
@@ -433,7 +541,7 @@ class TouchStateMachine(
         // ── Dwell gate, fire-time check (mode-aware) ─────────────────
         if (dwellGateEnabled()) {
             when (gateMode()) {
-               SettingsManager.GATE_MODE_BEND -> {
+                SettingsManager.GATE_MODE_BEND -> {
                     if (lastArmedBendTimeMs == 0L && !tryBackstopArm("Bend")) {
                         bendFireRetryCount++
                         Log.d(TAG, "Bend gate: fire without armed bend — retrying in " +
@@ -444,7 +552,24 @@ class TouchStateMachine(
                         dwellTimer.start(BEND_ARM_RETRY_MS)
                         return
                     }
-                    // Armed bend (early, backstop, or retry) → fire.
+                    // Armed — but an arm is an ANCHOR, not a verdict. A
+                    // straight glide's deceleration tail arms exactly like
+                    // a 90° corner; the discriminator is what the finger
+                    // did AFTER the valley. A recent above-ceiling move
+                    // means the valley was mid-glide: defer and re-probe.
+                    // A genuine park goes stale within the grace window
+                    // and fires on the next maturity.
+                    val sinceFastMs = SystemClock.uptimeMillis() - lastFastMoveWallMs
+                    if (lastFastMoveWallMs != 0L &&
+                        sinceFastMs < DWELL_GATE_FIRE_GRACE_MS
+                    ) {
+                        Log.d(TAG, "Bend gate: armed fire deferred — fast move " +
+                              "$sinceFastMs ms ago")
+                        dwellTimer.cancel()
+                        dwellTimer.start(BEND_ARM_RETRY_MS)
+                        return
+                    }
+                    // Armed bend and finger quiescent → fire.
                 }
                 SettingsManager.GATE_MODE_HYBRID -> {
                     if (lastArmedBendTimeMs == 0L) tryBackstopArm("Hybrid")
@@ -456,6 +581,7 @@ class TouchStateMachine(
                             return
                         }
                     }
+                    // Armed bend (or quiescent stillness) → fire.
                 }
                 else -> {
                     val sinceFastMs = SystemClock.uptimeMillis() - lastFastMoveWallMs
@@ -471,6 +597,7 @@ class TouchStateMachine(
         secondaryAnchorY = currentY
         benchObserver?.onAnchorUpdate(currentX, currentY, true, currentEventTime)
         resetSignaledCell()
+        resetPulseTracking()
         dwellTimer.cancel()
         transitionTo(TouchState.SECONDARY)
     }
@@ -483,8 +610,10 @@ class TouchStateMachine(
         previousSegment = -1
         deleteLeftCount = 0
         deleteRightCount = 0
+        deleteRatchet = newDeleteRatchet()
         activeMode = LayoutMode.LETTERS
         resetSignaledCell()
+        resetPulseTracking()
         transitionTo(TouchState.DELETE)
     }
 
@@ -499,6 +628,7 @@ class TouchStateMachine(
         deleteRightCount = 0
         activeMode = mode
         resetSignaledCell()
+        resetPulseTracking()
 
         val grace = modeGraceMs()
         modeGraceActive = grace > 0
@@ -548,6 +678,7 @@ class TouchStateMachine(
             deleteLeftCount = 0
             deleteRightCount = 0
             resetSignaledCell()
+            resetPulseTracking()
             transitionTo(TouchState.AXIS_PENDING)
             return true
         }
@@ -564,6 +695,7 @@ class TouchStateMachine(
         previousSegment = -1
         activeMode = LayoutMode.LETTERS
         resetSignaledCell()
+        resetPulseTracking()
 
         transitionTo(TouchState.PRIMARY)
         return true
@@ -763,42 +895,38 @@ class TouchStateMachine(
 
     // ── DELETE-mode drag handling ────────────────────────────────
 
+    /**
+     * Package 0.9: delete drag counts ride [deleteRatchet]. The old
+     * arm/disarm dual-threshold hysteresis is SUBSUMED by the ratchet
+     * (arm = deleteDeadzoneDp, release = 2× arm): within-band retreats
+     * produce no count change, oscillation at a reversal point can
+     * never re-tick, and a deliberate reversal past the release band
+     * FLIPS the lock so sweeping deletes continue without a re-arm
+     * dead zone. Direction (left vs right selection) follows the
+     * ratchet's locked sign; one sign stays 0 as before.
+     */
     private fun handleDeleteMove(event: MotionEvent, pointerIndex: Int) {
         val dxDp = GeometryEngine.pxToDp(event.getX(pointerIndex) - anchorX, density)
-        val axDp = Math.abs(dxDp)
 
-        val selectionActive = deleteLeftCount > 0 || deleteRightCount > 0
+        val newCount = deleteRatchet.update(dxDp)
 
-        // Dual-threshold hysteresis: a fresh selection needs 6 dp of
-        // travel, but an existing selection survives down to 2 dp —
-        // so lift-off jitter around the neutral zone can't flip a
-        // deliberate 1-character delete into a no-op (or vice versa).
-        if (!selectionActive) {
-            if (axDp < SettingsManager.deleteDeadzoneDp) return
-        } else if (axDp < DELETE_DISARM_THRESHOLD_DP) {
-            deleteLeftCount = 0
-            deleteRightCount = 0
-            onDeleteProgress?.invoke(0, 0)
+        if (newCount == 0) {
+            if (deleteLeftCount != 0 || deleteRightCount != 0) {
+                deleteLeftCount = 0
+                deleteRightCount = 0
+                onDeleteProgress?.invoke(0, 0)
+            }
             return
         }
 
-        val charsPerMm = if (SettingsManager.isInitialized) {
-            SettingsManager.deleteCharsPerMm
-        } else {
-            DELETE_CHARS_PER_MM_DEFAULT
-        }
-        val stepDp = DP_PER_MM / charsPerMm.coerceAtLeast(0.01f)
-
-        val count = (axDp / stepDp).toInt().coerceAtLeast(1)
-
         val newLeft: Int
         val newRight: Int
-        if (dxDp < 0f) {
-            newLeft = count
+        if (newCount < 0) {
+            newLeft = -newCount
             newRight = 0
         } else {
             newLeft = 0
-            newRight = count
+            newRight = newCount
         }
 
         if (newLeft != deleteLeftCount || newRight != deleteRightCount) {
@@ -821,6 +949,8 @@ class TouchStateMachine(
     private fun startCursor() {
         cursorColumns = 0
         cursorLines = 0
+        cursorRatchetH = newCursorRatchetH()
+        cursorRatchetV = newCursorRatchetV()
         dwellTimer.cancel()
         currentRing = Ring.NONE
         currentSegment = -1
@@ -828,6 +958,7 @@ class TouchStateMachine(
         previousSegment = -1
         activeMode = LayoutMode.LETTERS
         resetSignaledCell()
+        resetPulseTracking()
         transitionTo(TouchState.CURSOR)
     }
 
@@ -836,6 +967,14 @@ class TouchStateMachine(
      * SYMBOL. In SECONDARY the anchor is the dwell point; otherwise the
      * gesture anchor. Deadzone (ring NONE) suppresses segment updates;
      * overshoot beyond the outer edge clamps to OUTER.
+     *
+     * Package 0.3: in SECONDARY the deadzone boundary is the EFFECTIVE
+     * (widened) one — see [effectiveDeadzoneDp]. Entering it clears the
+     * signaled cell and latches nothing selected while the menu stays
+     * visible; lifting inside it commits nothing (ring NONE ⇒ the
+     * gesture records as ABORTED, same as a true-deadzone lift). Leaving
+     * it resumes classification with immediate cell signaling, so
+     * flick-out-again reselects on arrival with no re-dwell.
      *
      * @param final true when resolving the gesture-ending position on
      *              ACTION_UP — enables the radial exit projection so
@@ -855,9 +994,6 @@ class TouchStateMachine(
         // is credited where it was headed (outer) even though the
         // final sample hadn't crossed yet — and an inward mover must
         // genuinely retreat. Slow/parked fingers project nothing.
-        // Applied ONLY on the final (ACTION_UP) resolution: per-MOVE
-        // classification stays untouched so steering displays stay
-        // honest.
         var classDistDp = distDp
         if (final && radprojEnabled()) {
             classDistDp = projectedCommitDistanceDp(anchorX, anchorY, distDp)
@@ -865,19 +1001,51 @@ class TouchStateMachine(
 
         // Exit detection BEFORE currentRing is mutated below.
         val wasInDeadzone = currentRing == Ring.NONE
-        val newRing = geometryEngine.computeRing(classDistDp, posAngleDeg)
+
+        // ── Package 0.3b: retreat-gated abort ease ───────────────────
+        // The abort ease is MOTION-gated, not position-gated: the band
+        // [deadzone, deadzone+ease] is only special during INWARD
+        // motion. This restores small flicks that land short of the
+        // inner ring (outward/tangential/parked fingers classify by the
+        // TRUE boundary) while keeping "pull back to cancel" forgiving
+        // (inward velocity arms the eased boundary). The same gate on
+        // the NONE side prevents boundary flap: leaving NONE requires
+        // either clearing the eased radius outright or active outward
+        // velocity across the TRUE boundary — hovering in the band
+        // can't oscillate cell↔none without reversing radial velocity,
+        // which hands don't do.
+        val newRing = if (state == TouchState.SECONDARY) {
+            val eased = effectiveDeadzoneDp()
+            val base = if (SettingsManager.isInitialized) SettingsManager.deadzoneRadius
+                       else 18f
+            val radialV = radialVelocityDpPerMs(anchorX, anchorY)
+            when {
+                // Inside the true deadzone: abort unconditionally.
+                classDistDp < base -> Ring.NONE
+
+                // Currently in NONE: re-select only on outward intent —
+                // either fully past the eased radius, or crossing the
+                // TRUE boundary while flicking outward.
+                wasInDeadzone ->
+                    if (classDistDp > eased || radialV >= ABORT_EASE_RADIAL_FLOOR)
+                        geometryEngine.computeRing(classDistDp, posAngleDeg)
+                    else Ring.NONE
+
+                // Holding a cell: abort only on INWARD intent inside the
+                // band. Outward, tangential, and parked fingers keep the
+                // cell — a small flick that landed short of the inner
+                // ring still selects.
+                else ->
+                    if (classDistDp < eased && radialV <= -ABORT_EASE_RADIAL_FLOOR)
+                        Ring.NONE
+                    else geometryEngine.computeRing(classDistDp, posAngleDeg)
+            }
+        } else {
+            geometryEngine.computeRing(classDistDp, posAngleDeg)
+        }
 
         // ── Onset-weighted exit angle ─────────────────────────────────
-        // The FIRST angle resolved after leaving the deadzone decides the
-        // spoke — and it is the noisiest sample of the whole gesture
-        // (edge jitter, curved flicks, stale batched coordinates). Blend
-        // the positional bearing with the direction of travel over the
-        // last ONSET_VELOCITY_WINDOW_MS so launch curvature can't steal
-        // the spoke. Kept specifically for large-deadzone users, where
-        // the blind flight before the first resolved sample is long
-        // enough for launch direction to matter; at small deadzones it
-        // is measurably neutral. Slow/parked exits fall back to pure
-        // position.
+        // (unchanged from 0.3 — see its block comment)
         var angleDeg = posAngleDeg
         if (onsetEnabled() && newRing != Ring.NONE && wasInDeadzone) {
             motionHistory.velocity(onsetVelocityWindowMs())?.let { v ->
@@ -903,15 +1071,14 @@ class TouchStateMachine(
                 previousSegment = currentSegment
                 currentSegment = -1
                 resetSignaledCell()
+                resetPulseTracking()
             }
             onRingChanged?.invoke(newRing)
             benchObserver?.onRingChanged(previousRing, newRing, currentEventTime)
             // Geometry motion resets the dwell clock ONLY when no bend
-            // owns the scheduled fire. An armed bend must not be
-            // postponed by ring crossings that happen AFTER the valley —
-            // the late-open wrong-ring misses. (Classic stillness mode
-            // keeps the unconditional reset: motion restarting the
-            // stillness clock IS its semantics.)
+            // owns the scheduled fire (see 0.4-era note — armed bend
+            // owns the scheduled fire; classic stillness keeps the
+            // unconditional reset).
             if (state == TouchState.PRIMARY) maybeRestartDwellOnMotion()
         }
 
@@ -921,9 +1088,10 @@ class TouchStateMachine(
             previousSegment = currentSegment
             currentSegment = newSegment
             onSegmentChanged?.invoke(newSegment)
-            // Same arm-respecting rule as the ring-crossing reset above.
             if (state == TouchState.PRIMARY) maybeRestartDwellOnMotion()
         }
+
+        updatePulseTracking(anchorX, anchorY, distDp, posAngleDeg)
 
         if (currentRing != Ring.NONE && currentSegment != -1 &&
             (currentRing != signaledRing || currentSegment != signaledSegment)
@@ -954,6 +1122,68 @@ class TouchStateMachine(
         }
         dwellTimer.reset()
     }
+    
+    /**
+     * Pulse-ring update (Package 0.4a). Runs after the raw ring
+     * resolution in [resolveGeometry].
+     *
+     * Rules:
+     * 1. ADVANCE outward (any rank increase) fires — whether earned by
+     *    raw geometry or led by the projection. Anticipatory by at
+     *    most the projection horizon / max shift.
+     * 2. REGRESS inward fires ONLY when the current advance was NOT
+     *    projection-led: the raw ring walked itself down through the
+     *    boundary, a genuine crossing. A projection-led advance that
+     *    withdraws (finger braked before crossing) collapses SILENTLY
+     *    back to the raw ring — no compensating pulse, no callback.
+     * 3. While the raw ring catches up to a projection-led pulseRing,
+     *    the ledger silently forgets the projection debt, so a later
+     *    genuine regress fires normally.
+     *
+     * Callers see onPulseRingChanged(old, new) with the same pairing
+     * semantics the old onRingChanged haptics used — deadzone exits,
+     * ring↔ring crossings, both directions.
+     */
+    private fun updatePulseTracking(
+        anchorX: Float, anchorY: Float, distDp: Float, angleDeg: Float
+    ) {
+        // Projection applies to the PULSE path whenever the feature is
+        // on — not just at commit. Parked/slow fingers project nothing.
+        val projDistDp = if (radprojEnabled())
+            projectedCommitDistanceDp(anchorX, anchorY, distDp) else distDp
+        val projRing =
+            if (state == TouchState.SECONDARY && projDistDp < effectiveDeadzoneDp())
+                Ring.NONE
+            else geometryEngine.computeRing(projDistDp, angleDeg)
+
+        // Rule 3: raw catch-up retires the projection debt.
+        if (rank(currentRing) >= rank(pulseRing) && pulseLedByProjection) {
+            pulseLedByProjection = false
+        }
+
+        val oldRank = rank(pulseRing)
+        val newRank = rank(projRing)
+        when {
+            newRank > oldRank -> {
+                pulseLedByProjection = newRank > rank(currentRing)
+                pulseRing = projRing
+                onPulseRingChanged?.invoke(ringAt(oldRank), projRing)
+            }
+            newRank < oldRank -> {
+                if (pulseLedByProjection) {
+                    pulseRing = currentRing          // silent collapse (rule 2)
+                } else {
+                    pulseRing = projRing
+                    onPulseRingChanged?.invoke(ringAt(oldRank), projRing)
+                }
+                pulseLedByProjection = false
+            }
+            // equal ranks: steady — nothing to signal
+        }
+    }
+
+    /** True when [pulseRing] outranks the raw ring (projection debt). */
+    private var pulseLedByProjection: Boolean = false
      
     private fun onsetEnabled(): Boolean =
         if (SettingsManager.isInitialized) SettingsManager.onsetExitAngleEnabled
@@ -1011,7 +1241,26 @@ class TouchStateMachine(
             distDp, radialVDpPerMs, radprojHorizonMs(), radprojMaxShiftDp()
         )
     }
-        /**
+    
+    /**
+     * Radial velocity (dp/ms) of the finger along the anchor→finger
+     * ray: positive = moving OUTWARD, negative = retreating INWARD.
+     * Same trailing-window velocity estimator the exit projection and
+     * onset blend use. Returns 0f when unmeasurable (parked, <2
+     * samples) — a parked finger gets pure geometry on both edges of
+     * the 0.3b rule set.
+     */
+    private fun radialVelocityDpPerMs(anchorX: Float, anchorY: Float): Float {
+        val v = motionHistory.velocity() ?: return 0f
+        val dxPx = currentX - anchorX
+        val dyPx = currentY - anchorY
+        val lenPx = Math.hypot(dxPx.toDouble(), dyPx.toDouble()).toFloat()
+        if (lenPx < 1f) return 0f      // at anchor: no direction defined
+        val radialVPxPerMs = v.first * (dxPx / lenPx) + v.second * (dyPx / lenPx)
+        return GeometryEngine.pxToDp(radialVPxPerMs, density)
+    }
+    
+    /**
      * Dwell stillness gate, move-side. While the finger is moving faster
      * than the stillness ceiling, the dwell clock is restarted so a fast
      * flick can never accrue dwell time. Paired with the DOWN/UP cancels
@@ -1175,32 +1424,31 @@ class TouchStateMachine(
         anchorY = currentY
     }
     
+    /**
+     * Package 0.9: cursor drags ride per-axis ratchets (H and V lock
+     * independently — the pinned sub-decision, so an L-shaped drag
+     * works and one axis's reversal never freezes the other). The old
+     * raw signedCount path is subsumed: the ratchet's arm threshold
+     * IS the cursor deadzone, its release band kills boundary
+     * ping-pong, and a genuine reversal flips and counts on the same
+     * event. Counts remain signed net displacement, so the 0.4
+     * cursor-tick semantics (tick per count change) are inherited.
+     */
     private fun handleCursorMove(event: MotionEvent, pointerIndex: Int) {
         val dxDp = GeometryEngine.pxToDp(event.getX(pointerIndex) - anchorX, density)
         val dyDp = GeometryEngine.pxToDp(event.getY(pointerIndex) - anchorY, density)
-        val deadDp: Float = if (SettingsManager.isInitialized) SettingsManager.cursorDeadzoneDp
-                            else CURSOR_DEADZONE_DEFAULT
 
-        val newCols = signedCount(dxDp, deadDp, DP_PER_MM / cursorColumnsPerMm())
+        val newCols = cursorRatchetH.update(dxDp)
         if (newCols != cursorColumns) {
             cursorColumns = newCols
             onCursorMoveH?.invoke(newCols)
         }
 
-        val newLines = signedCount(dyDp, deadDp, (DP_PER_MM * 10f) / cursorLinesPerCm())
+        val newLines = cursorRatchetV.update(dyDp)
         if (newLines != cursorLines) {
             cursorLines = newLines
             onCursorMoveV?.invoke(newLines)
         }
-    }
-
-    /** Steps for one axis: 0 inside the deadzone, otherwise displacement
-     *  measured past the deadzone edge, divided by the step size. */
-    private fun signedCount(dispDp: Float, deadDp: Float, stepDp: Float): Int {
-        val mag = Math.abs(dispDp)
-        if (mag <= deadDp) return 0
-        val count = ((mag - deadDp) / stepDp).toInt().coerceAtLeast(1)
-        return if (dispDp < 0f) -count else count
     }
 
     // ── Transition machinery ─────────────────────────────────────

@@ -3,6 +3,7 @@ package com.radialtype.ui
 import java.util.Locale
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
@@ -78,17 +79,34 @@ class RadialRenderer(
         private const val DELETE_RED = 0xFFF7768EL
         private const val NUMBER_GREEN = 0xFF9ECE6AL
         private const val SYMBOL_YELLOW = 0xFFE0AF68L
+
+        // ── Package 0.2: large-mode true-boundary guide ──────────
+        // Faint dashed yellow rings drawn where the UNSCALED
+        // classification boundaries actually are, when debug mode is
+        // on and the visual scale ≠ 100%. Yellow stays distinct from
+        // the cyan structure lines and magenta secondary accent.
+        private const val GUIDE_COLOR = 0x55E0AF68L
     }
 
     var debugMode: Boolean = true
     var perfHud: PerfHud? = null
     var showIdleZoneHint: Boolean = true
-    
+
     var reachProfile: FloatArray = FloatArray(8) { 1f }
 
     var deadZoneRadius: Float = GeometryEngine.DEAD_ZONE_RADIUS
     var innerRadiusMax: Float = GeometryEngine.INNER_RADIUS_MAX
     var outerRadiusMax: Float = GeometryEngine.OUTER_RADIUS_MAX
+
+    // ── Package 0.2: render-only visual scale ─────────────────────
+    /** Multiplier applied to every DRAWN radius (deadzone, rings,
+     *  cell labels). 1.0 = drawn matches classified. GeometryEngine
+     *  classification radii are never touched by this value — the
+     *  finger keeps hitting the cells muscle memory trained on while
+     *  the drawn menu extends past the thumb's occlusion zone.
+     *  Refreshed from settings at the top of every render(). */
+    var visualScale: Float = 1f
+        private set
 
     var floatingLabelOffsetPx: Float = LABEL_OFFSET_PX
         private set
@@ -100,13 +118,13 @@ class RadialRenderer(
     private var zoneCY = -1f
     private var zoneRX = 0f
     private var zoneRY = 0f
-    
+
     private val effectiveDebug: Boolean
         get() = debugMode && (!SettingsManager.isInitialized || SettingsManager.debugMode)
 
     private val density = context.resources.displayMetrics.density
     private val appContext = context.applicationContext
-        
+
     private val sectorFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -134,6 +152,15 @@ class RadialRenderer(
         style = Paint.Style.STROKE
         strokeWidth = 2f * density
         color = DEAD_RIM.toInt()
+    }
+
+    // Dashed guide for the TRUE (unscaled) ring boundaries — drawn
+    // only when the visual scale pushes the drawn menu away from the
+    // classification geometry and debug mode is on.
+    private val trueBoundaryPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1f * density
+        pathEffect = DashPathEffect(floatArrayOf(3f * density, 4f * density), 0f)
     }
 
     private val deleteWashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -184,6 +211,10 @@ class RadialRenderer(
             innerRadiusMax = maxOf(SettingsManager.innerRingRadius, deadZoneRadius + 20f)
             outerRadiusMax = maxOf(SettingsManager.outerRingRadius, innerRadiusMax + 20f)
             reachProfile = SettingsManager.reachProfile.copyOf()
+            // Package 0.2: render-only scale. Read BEFORE any early
+            // return so subsequent frames always carry the current
+            // value even if the state changes between touches.
+            visualScale = SettingsManager.menuVisualScale
         }
 
         if (data.state == TouchState.IDLE || data.state == TouchState.AXIS_PENDING) {
@@ -250,7 +281,7 @@ class RadialRenderer(
         drawFloatingTextWithBackdrop(canvas, text, data.labelX, y,
             floatingLabelPaint, DELETE_RED.toInt())
     }
-    
+
     private fun drawCursorFeedback(canvas: Canvas, data: RadialRenderData) {
         if (zoneRX > 0f && zoneRY > 0f && zoneCX >= 0f) {
             val inset = 2f
@@ -311,6 +342,15 @@ class RadialRenderer(
         ringLinePaint.color = LINE_STRONG.toInt()
         drawProfileRing(canvas, cx, cy, innerRadiusMax, ringLinePaint)
 
+        // Package 0.2: when the visual scale has pushed the drawn
+        // rings away from where classification actually happens, and
+        // the debug hat is on, annotate the lie — faint dashed rings
+        // at the true boundaries. Below the active-cell glow so the
+        // selected-cell highlight stays the brightest thing on screen.
+        if (effectiveDebug && visualScale != 1f) {
+            drawTrueBoundaryGuides(canvas, cx, cy)
+        }
+
         if (data.ring != Ring.NONE && data.segment in 0 until 8) {
             val lo = if (data.ring == Ring.INNER) deadZoneRadius else innerRadiusMax
             val hi = if (data.ring == Ring.INNER) innerRadiusMax else outerRadiusMax
@@ -336,7 +376,7 @@ class RadialRenderer(
             drawPrimaryLabels(canvas, cx, cy, data.mode, accent, data)
         }
     }
-    
+
     private fun drawPrimaryLabels(canvas: Canvas, cx: Float, cy: Float,
                                   mode: com.radialtype.engine.LayoutMode,
                                   accent: Int, data: RadialRenderData) {
@@ -404,11 +444,18 @@ class RadialRenderer(
 
     private fun drawDeadZone(canvas: Canvas, cx: Float, cy: Float, rDp: Float,
                              isSecondary: Boolean, accent: Int) {
+        // Package 0.3: in SECONDARY the FSM classifies against the
+        // EFFECTIVE deadzone (geometric + abort ease), so the drawn rim
+        // shows that boundary — the rim never lies about where NONE
+        // begins. Other states draw the exact geometric radius.
+        val baseDp = if (isSecondary && SettingsManager.isInitialized)
+            rDp + SettingsManager.secondaryAbortEaseDp
+        else rDp
         scratchPath.reset()
         val steps = 72
         for (i in 0..steps) {
             val a = i * 360f / steps
-            val r = boundaryPxAt(rDp, a)
+            val r = boundaryPxAt(baseDp, a)
             val rad = Math.toRadians(a.toDouble())
             val x = cx + (Math.cos(rad) * r).toFloat()
             val y = cy + (Math.sin(rad) * r).toFloat()
@@ -578,20 +625,35 @@ class RadialRenderer(
             canvas.drawPath(path, glowStrokePaint)
         }
     }
-    
+
     /** Same profile math the FSM's GeometryEngine classifies with. */
     private fun reachAt(angleDeg: Float): Float =
         GeometryEngine.reachFactorAt(angleDeg, reachProfile)
 
-    /** Boundary radius in px for a dp base radius at a bearing. */
+    /**
+     * Boundary radius in px for a dp base radius at a bearing.
+     *
+     * Package 0.2: this is the single choke point for all DRAWN menu
+     * radii — sector slices, ring outlines, deadzone, label positions —
+     * so the render-only visual scale is applied here. Classification
+     * in GeometryEngine does not consult this method and is therefore
+     * untouched: the finger keeps hitting the same physical cells.
+     */
     private fun boundaryPxAt(baseRadiusDp: Float, angleDeg: Float): Float =
+        baseRadiusDp * visualScale * density * reachAt(angleDeg)
+
+    /**
+     * True (classification) boundary radius in px — deliberately
+     * WITHOUT the visual scale. Used only by the dashed debug guides.
+     */
+    private fun trueBoundaryPxAt(baseRadiusDp: Float, angleDeg: Float): Float =
         baseRadiusDp * density * reachAt(angleDeg)
 
     /** Closed profile-following outline for a ring boundary. */
     private fun drawProfileRing(canvas: Canvas, cx: Float, cy: Float,
                                 baseRadiusDp: Float, paint: Paint) {
         if (reachProfile.all { it >= 0.999f }) {   // legacy: exact circle
-            canvas.drawCircle(cx, cy, baseRadiusDp * density, paint)
+            canvas.drawCircle(cx, cy, baseRadiusDp * visualScale * density, paint)
             return
         }
         scratchPath.reset()
@@ -606,6 +668,31 @@ class RadialRenderer(
         }
         canvas.drawPath(scratchPath, paint)
     }
+
+    /**
+     * Package 0.2: dashed guides at the UNSCALED ring boundaries —
+     * deadzone, inner, outer — so anyone wearing the debug hat can
+     * verify where commits will actually be classified while the
+     * drawn menu is enlarged. Drawn only when effectiveDebug is on
+     * and the visual scale differs from 1.0.
+     */
+    private fun drawTrueBoundaryGuides(canvas: Canvas, cx: Float, cy: Float) {
+        trueBoundaryPaint.color = GUIDE_COLOR.toInt()
+        for (base in listOf(deadZoneRadius, innerRadiusMax, outerRadiusMax)) {
+            scratchPath.reset()
+            val steps = 72
+            for (i in 0..steps) {
+                val a = i * 360f / steps
+                val r = trueBoundaryPxAt(base, a)
+                val rad = Math.toRadians(a.toDouble())
+                val x = cx + (Math.cos(rad) * r).toFloat()
+                val y = cy + (Math.sin(rad) * r).toFloat()
+                if (i == 0) scratchPath.moveTo(x, y) else scratchPath.lineTo(x, y)
+            }
+            canvas.drawPath(scratchPath, trueBoundaryPaint)
+        }
+    }
+
      /**
      * Annular slice bounded by the reach profile. Segment k spans the
      * angular range [k·45 − 22.5, k·45 + 22.5] — exactly the range

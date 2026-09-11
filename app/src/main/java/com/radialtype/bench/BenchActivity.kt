@@ -28,6 +28,7 @@ import com.radialtype.text.SyllableProvider
 import com.radialtype.ui.RadialRenderData
 import com.radialtype.ui.RadialRenderer
 import java.util.Locale
+import kotlin.math.abs
 
 /**
  * Flick-accuracy benchmark. Full-screen surface driving a private
@@ -38,7 +39,10 @@ import java.util.Locale
  *
  * Target presentation is visual (BenchTargetView): ring encoded
  * spatially, menu level by color (blue = primary flick, orange =
- * secondary dwell-then-flick). Completed sessions persist via
+ * secondary dwell-then-flick). Secondary trials ALSO show the
+ * designated origin cell (Package 0.1): hollow blue marker "1" with a
+ * dashed arrow to the target "2" — the cue for "start here first,
+ * then flick to the marked cell". Completed sessions persist via
  * BenchStore for history and A/B comparison.
  */
 class BenchActivity : AppCompatActivity() {
@@ -67,6 +71,9 @@ class BenchActivity : AppCompatActivity() {
     private val logger = GestureLogger()
     private val records = mutableListOf<TrialRecord>()
     private var sessionPersisted = false
+
+    /** Live playlist entry (target + origin); null between sessions. */
+    private var currentTrial: BenchTrial? = null
 
     private var characterMap: CharacterMap? = null
     private var syllableProvider: SyllableProvider? = null
@@ -101,7 +108,7 @@ class BenchActivity : AppCompatActivity() {
         logger.onTrialComplete = { record -> onTrialComplete(record) }
 
         setContentView(buildRunView())
-        // In onCreate, after setContentView(...):
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (!sessionPersisted && this@BenchActivity::session.isInitialized &&
@@ -109,9 +116,10 @@ class BenchActivity : AppCompatActivity() {
                 ) {
                     persistSession(System.currentTimeMillis(), partial = true)
                 }
-        finish()
-    }
-})
+                finish()
+            }
+        })
+
         startSession()
     }
 
@@ -125,13 +133,23 @@ class BenchActivity : AppCompatActivity() {
             trialsPerTarget = trialsPerTarget,
             includeSecondary = includeSecondary
         )
-        val target = session.nextTarget()
-        if (target == null) {
+        val trial = session.nextTrial()
+        if (trial == null) {
             showSummary()
             return
         }
-        surface?.currentTarget = target
+        installTrial(trial)
         updateBanner(null)
+    }
+
+    /**
+     * Installs a playlist entry on the surface and banner widgets.
+     * The ORIGIN is as much a part of the trial as the target: the
+     * surface keeps scoring target-only, but the banner cues both.
+     */
+    private fun installTrial(trial: BenchTrial) {
+        currentTrial = trial
+        surface?.currentTarget = trial.target
     }
 
     private fun onTrialComplete(record: TrialRecord) {
@@ -142,15 +160,17 @@ class BenchActivity : AppCompatActivity() {
         records.add(record)
         session.recordResult(record)
 
-        // Pick the next target NOW, synchronously inside ACTION_UP handling.
+        // Pick the next trial NOW, synchronously inside ACTION_UP handling.
         // Deferring this to a handler post let a fast follow-up gesture beat
-        // the banner update and get scored against a stale target.
-        val next = session.nextTarget()
-        if (next != null) surface?.currentTarget = next
+        // the banner update and get scored against a stale target. Retried
+        // misses come back carrying their ORIGINAL origin, so the approach
+        // direction never gets re-rolled mid-session.
+        val next = session.nextTrial()
+        if (next != null) installTrial(next)
 
         uiHandler.post {
             if (next == null) showSummary()
-            else onTrialScored(record, next)
+            else onTrialScored(record, next.target)
         }
     }
 
@@ -175,7 +195,7 @@ class BenchActivity : AppCompatActivity() {
     }
 
     private fun updateBanner(flash: Pair<String, Int>?) {
-        val target = surface?.currentTarget ?: return
+        val target = currentTrial?.target ?: return
 
         feedbackRunnable?.let { uiHandler.removeCallbacks(it) }
         if (flash != null) {
@@ -191,13 +211,22 @@ class BenchActivity : AppCompatActivity() {
             statusText?.text = ""
         }
 
-        // Visual target: ring spatial, level by color.
-        targetView?.currentTarget = target
-        val isPrimary = target.level == TargetLevel.PRIMARY
-        targetText?.text =
-            if (isPrimary) "primary · single flick" else "secondary · dwell, then flick"
+        // Visual target: ring spatial, level by color, origin as the
+        // hollow "1" marker with a dashed arrow to the target "2".
+        targetView?.showTrial(currentTrial)
+
+        val origin = currentTrial?.origin
+        targetText?.text = when {
+            target.level == TargetLevel.PRIMARY ->
+                "primary · flick to ${dirName(target.segment)} ${target.ring.name.lowercase()}"
+            origin != null ->
+                "1 · dwell ${dirName(origin.segment)} ${origin.ring.name.lowercase()}" +
+                    "   →   2 · flick ${dirName(target.segment)} ${target.ring.name.lowercase()}"
+            else -> "secondary · dwell, then flick"
+        }
         targetText?.setTextColor(
-            if (isPrimary) BenchTargetView.COL_PRIMARY else BenchTargetView.COL_SECONDARY
+            if (target.level == TargetLevel.PRIMARY) BenchTargetView.COL_PRIMARY
+            else BenchTargetView.COL_SECONDARY
         )
 
         val stats = session.stats()
@@ -244,7 +273,7 @@ class BenchActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         targetView = BenchTargetView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(132), dp(132)).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(208), dp(208)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
             }
         }
@@ -261,8 +290,8 @@ class BenchActivity : AppCompatActivity() {
     }
 
     private fun beginCurrentTrial() {
-        val target = surface?.currentTarget ?: return
-        logger.beginTrial(target, SystemClock.uptimeMillis())
+        val trial = currentTrial ?: return
+        logger.beginTrial(trial.target, SystemClock.uptimeMillis(), trial.origin)
     }
 
     // ── Summary ──────────────────────────────────────────────────
@@ -276,13 +305,14 @@ class BenchActivity : AppCompatActivity() {
         persistSession(timestamp, partial = false)
         setContentView(buildSummaryView(session.stats(), timestamp))
     }
-    
+
     private fun persistSession(timestamp: Long, partial: Boolean) {
         runCatching {
             BenchStore.save(this, BenchStore.sessionToJson(
                 timestamp, seed, trialsPerTarget, includeSecondary,
                 session.stats(),
-                BenchStore.autoLabel() + if (partial) " · partial" else ""
+                BenchStore.autoLabel() + if (partial) " · partial" else "",
+                BenchStore.originTally(records)
             ))
         }
     }
@@ -330,6 +360,167 @@ class BenchActivity : AppCompatActivity() {
                 "Previous: %.1f%%  (Δ %+.1f pts)", pRate, rate - pRate))
         }
 
+        // ── Diagnostics: error taxonomy for settings tuning ──────
+        // Every number here maps to a knob in the settings menu;
+        // the "→" lines fire only when a threshold is crossed and
+        // sample size backs it, so a clean run prints nothing but
+        // the raw tallies.
+        val attemptedRecs = records.filter { it.outcome != TrialOutcome.ABORTED }
+        val tally = TrialMetrics.missAspects(attemptedRecs)
+        if (tally.misses > 0) {
+            header("Diagnostics")
+            val aspPct = { n: Int -> 100f * n / tally.misses }
+            statLine(String.format(Locale.US,
+                "Miss aspects: %d× segment (%.0f%%) · %d× ring (%.0f%%) · %d× menu (%.0f%%)",
+                tally.segment, aspPct(tally.segment),
+                tally.ring, aspPct(tally.ring),
+                tally.menu, aspPct(tally.menu)))
+
+            // Under/overshoot — settings-aware. The SAME miss data
+            // feeds either stage of the tuning ladder: projection off
+            // → hints target the geometric ring edges; projection on
+            // → hints target the projection parameters. Run order
+            // (per the tuning brief): geometry first (projection off),
+            // then projection on top of a settled geometry.
+            val projOn = SettingsManager.radprojEnabled
+            val rsP = TrialMetrics.ringErrors(attemptedRecs, TargetLevel.PRIMARY)
+            if (rsP.undershoot + rsP.overshoot > 0) {
+                statLine(String.format(Locale.US,
+                    "Primary ring errors: %d under · %d over  (%d%% under)%s",
+                    rsP.undershoot, rsP.overshoot, rsP.undershootPct,
+                    if (projOn) "  · proj ON" else ""))
+                val n = rsP.undershoot + rsP.overshoot
+                if (projOn) {
+                    if (rsP.undershootPct >= 67 && n >= 3) {
+                        statLine("→ still dying short WITH projection: raise " +
+                            "projection strength/max credit; if exhausted, the " +
+                            "geometry itself is short — raise the boundary radius")
+                    } else if (rsP.undershootPct <= 33 && n >= 3) {
+                        statLine("→ projection overshoots: lower strength or " +
+                            "max projected distance")
+                    }
+                } else {
+                    if (rsP.undershootPct >= 67 && n >= 3) {
+                        statLine("→ flicks die short (no projection): move the " +
+                            "inner→outer boundary INWARD (reduce the outer " +
+                            "ring's start radius) so short flicks land OUTER")
+                    } else if (rsP.undershootPct <= 33 && n >= 3) {
+                        statLine("→ flicks sail past inner into OUTER: move the " +
+                            "inner→outer boundary OUTWARD so landing INNER " +
+                            "takes less precision")
+                    }
+                }
+            }
+
+            // Leg 2 of secondary trials — same split, launch cell →
+            // target. Gated on having secondary attempts at all.
+            val secAttempted = attemptedRecs.any {
+                it.target.level == TargetLevel.SECONDARY
+            }
+            if (secAttempted) {
+                val rsS = TrialMetrics.ringErrors(attemptedRecs, TargetLevel.SECONDARY)
+                if (rsS.undershoot + rsS.overshoot > 0) {
+                    statLine(String.format(Locale.US,
+                        "Secondary ring errors (flick 2): %d under · %d over  (%d%% under)",
+                        rsS.undershoot, rsS.overshoot, rsS.undershootPct))
+                    if (rsS.undershootPct >= 67 && rsS.undershoot + rsS.overshoot >= 3) {
+                        statLine("→ second flick dies short from the launch " +
+                            "cell: the dwell-anchored menu may sit closer " +
+                            "than the flick length tuned for primary — check " +
+                            "secondary geometry relative to primary")
+                    }
+                }
+
+                // Leg 1 — plant → origin. THE launch-discipline number.
+                val ll = TrialMetrics.launchLegErrors(attemptedRecs)
+                statLine(String.format(Locale.US,
+                    "Launch leg (plant → origin): %d clean · %d ring · %d seg " +
+                        "· %d deadzone-dwell  (n=%d)",
+                    ll.clean, ll.ringUnder + ll.ringOver, ll.segment,
+                    ll.notReached, ll.measured))
+                val lUnderOver = ll.ringUnder + ll.ringOver
+                if (ll.notReached > 0 && ll.notReached >= ll.measured / 4 &&
+                    ll.measured >= 4
+                ) {
+                    statLine("→ deadzone dwells: launches stall near the plant — " +
+                        "raise deadzone abort-ease or shrink the deadzone")
+                }
+                if (lUnderOver >= 3 && ll.ringUnder * 2 > lUnderOver) {
+                    statLine("→ launch flicks die short: move the boundary " +
+                        "INWARD — flick 1 length drives the same geometry " +
+                        "as primary")
+                } else if (lUnderOver >= 3 && ll.ringOver * 2 > lUnderOver) {
+                    statLine("→ launch flicks sail past the origin ring: move " +
+                        "the inner→outer boundary OUTWARD")
+                }
+            }
+
+            // Rotational (launch-angle) bias.
+            val ab = TrialMetrics.angularBias(attemptedRecs)
+            if (ab.samples > 0) {
+                statLine(String.format(Locale.US,
+                    "Rotational error: mean %+.1f seg  ·  %d CW · %d CCW  (n=%d)",
+                    ab.meanSignedSegments, ab.cwCount, ab.ccwCount, ab.samples))
+                if (abs(ab.meanSignedSegments) >= 0.25f && ab.samples >= 4) {
+                    statLine("→ systematic launch-angle bias: tune onset exit-angle " +
+                        "blend (position weight) or per-direction reach")
+                }
+            }
+
+            // Steering churn vs boundary chatter.
+            val meanCorr = TrialMetrics.meanCorrections(attemptedRecs)
+            statLine(String.format(Locale.US,
+                "Corrections per gesture: %.1f", meanCorr))
+            if (meanCorr >= 2f) {
+                statLine("→ boundary chatter: raise segment hysteresis")
+            }
+
+            // Dwell handoff: is the gate + dwell longer than the pause?
+            val lag = TrialMetrics.dwellLagSpread(attemptedRecs)
+            if (lag.median != null) {
+                statLine(String.format(Locale.US,
+                    "Dwell handoff lag: median %d ms · p90 %d ms  (n=%d)",
+                    lag.median, lag.p90 ?: lag.median, lag.n))
+                if (lag.median >= 40) {
+                    statLine("→ menu opens well after you stopped: " +
+                        "try lowering dwell duration")
+                } else if (lag.median < 0) {
+                    statLine("→ menu opened mid-motion (misfire): lengthen dwell " +
+                        "duration or lower the gate speed ceiling")
+                }
+            }
+
+            // Bend speed vs the stillness ceiling (only meaningful
+            // when the stillness leg is armed at all).
+            if (SettingsManager.dwellGateEnabled &&
+                SettingsManager.dwellGateMode != SettingsManager.GATE_MODE_BEND
+            ) {
+                val bs = TrialMetrics.bendSpeedSpread(attemptedRecs)
+                if (bs.medianPxPerMs != null) {
+                    val density = resources.displayMetrics.density
+                    val p90dp = (bs.p90PxPerMs ?: bs.medianPxPerMs) / density
+                    val ceiling = SettingsManager.dwellGateMaxSpeedDpPerMs
+                    statLine(String.format(Locale.US,
+                        "Bend speed: p90 %.2f dp/ms vs gate ceiling %.2f dp/ms  (n=%d)",
+                        p90dp, ceiling, bs.n))
+                    if (p90dp >= 0.9f * ceiling && bs.n >= 3) {
+                        statLine("→ decelerations barely pass the ceiling: " +
+                            "raise dwell gate speed")
+                    }
+                }
+            }
+        }
+
+        // Per-level hit movement time — the secondary−primary gap is
+        // the dwell tax in milliseconds.
+        val mtP = TrialMetrics.movementTimeSpread(records, TargetLevel.PRIMARY)
+        val mtS = TrialMetrics.movementTimeSpread(records, TargetLevel.SECONDARY)
+        if (mtP.n > 0 && mtS.n > 0) {
+            statLine(String.format(Locale.US,
+                "Hit time: primary median %d ms (n=%d) · secondary median %d ms (n=%d)",
+                mtP.median ?: 0, mtP.n, mtS.median ?: 0, mtS.n))
+        }
+
         // Per-cell grids.
         for (level in TargetLevel.entries) {
             val cells = stats.perCell.entries.filter { it.key.level == level }
@@ -364,7 +555,9 @@ class BenchActivity : AppCompatActivity() {
         // sampled so the summary stays scrollable; the bullseye in
         // TrialTraceView is what to eyeball on them. Aborts are
         // excluded from groups: they were free retries, not attempts
-        // charged to the cell.
+        // charged to the cell. Headers now carry the designated
+        // origin (Package 0.1) so landing bias can be read per
+        // approach direction right in the summary.
         val maxMissCards = 6
         val maxHitCards = 3
 
@@ -396,14 +589,14 @@ class BenchActivity : AppCompatActivity() {
             // Miss-aspect tally for this cell's misses: "2×menu, 1×ring"
             // under the header — the first thing to read per weak cell.
             if (misses.isNotEmpty()) {
-                val tally = misses.flatMap { it.missedBy }
+                val tallyLine = misses.flatMap { it.missedBy }
                     .groupingBy { it }
                     .eachCount()
                     .entries
                     .sortedByDescending { it.value }
                     .joinToString(", ") { "${it.value}×${it.key.label}" }
                 col.addView(TextView(this).apply {
-                    text = if (tally.isEmpty()) "misses: unattributed" else "misses: $tally"
+                    text = if (tallyLine.isEmpty()) "misses: unattributed" else "misses: $tallyLine"
                     textSize = 12f
                     setTextColor(COL_MUTED)
                     setPadding(dp(8), 0, 0, dp(2))
@@ -417,13 +610,18 @@ class BenchActivity : AppCompatActivity() {
                 val gotTxt = if (got != null)
                     "got ${got.first.name.lowercase()}/${dirName(got.second)}" else "no commit"
                 val prefix = if (hit) "✓ hit" else "✗ $gotTxt"
+                // Launch cell the gesture was supposed to use — the
+                // approach-direction variable for landing-bias analysis.
+                val fromTxt = r.originCell?.let { oc ->
+                    "from ${dirName(oc.segment)} ${oc.ring.name.lowercase()} · "
+                } ?: ""
                 // Dwell lag, only when the menu actually opened: time from
                 // the velocity-minimum sample (the bend) to the SECONDARY
                 // transition. Positive = menu opened after you stopped;
                 // negative = misfire, opened mid-motion.
                 val lagTxt = r.dwellLagMs?.let { " · lag ${it} ms" } ?: ""
                 col.addView(buildTraceCard(r,
-                    "① ${dirName(target.segment)} ${target.ring.name.lowercase()} — " +
+                    "$fromTxt① ${dirName(target.segment)} ${target.ring.name.lowercase()} — " +
                         "$prefix$wrong · ${r.movementTimeMs} ms$lagTxt · ${correctionsIn(r)} corr."
                 ))
             }
@@ -489,7 +687,7 @@ class BenchActivity : AppCompatActivity() {
 
         return scroll
     }
-    
+
     /** Segment changes after the first populated cell. */
     private fun correctionsIn(record: TrialRecord): Int {
         val segChanges = record.events.count { it is BenchEvent.SegmentChanged }
@@ -544,7 +742,6 @@ internal class BenchSurfaceView(
     private val selectionTracker = SelectionTracker(characterMap, syllableProvider)
     private val renderer = RadialRenderer(context, characterMap, syllableProvider).apply {
         debugMode = true
-
     }
 
     val fsm: TouchStateMachine = TouchStateMachine(

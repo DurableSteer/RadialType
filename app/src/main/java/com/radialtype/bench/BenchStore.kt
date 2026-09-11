@@ -13,6 +13,11 @@ import java.io.File
  * timestamp. Stores aggregate + per-cell results, the seed (playlist
  * identity), and a snapshot of every classification-relevant setting,
  * so a saved run is self-describing for later comparison.
+ *
+ * Package 0.1: sessions also store PER-ORIGIN aggregates — attempts
+ * and hits grouped by the designated launch cell of each secondary
+ * trial. Old files simply lack the field (parsed as empty); new
+ * files parse identically on old readers, hence version stays 1.
  */
 object BenchStore {
 
@@ -45,11 +50,22 @@ object BenchStore {
         trialsPerTarget: Int,
         includeSecondary: Boolean,
         stats: SessionStats,
-        configLabel: String
+        configLabel: String,
+        perOrigin: Map<BenchTarget, PerCellStats> = emptyMap()
     ): JSONObject {
         val cells = JSONArray()
         for ((k, v) in stats.perCell) {
             cells.put(JSONObject().apply {
+                put("level", k.level.name)
+                put("ring", k.ring.name)
+                put("segment", k.segment)
+                put("attempts", v.attempts)
+                put("hits", v.hits)
+            })
+        }
+        val origins = JSONArray()
+        for ((k, v) in perOrigin) {
+            origins.put(JSONObject().apply {
                 put("level", k.level.name)
                 put("ring", k.ring.name)
                 put("segment", k.segment)
@@ -70,8 +86,27 @@ object BenchStore {
             put("aborted", stats.aborted)
             put("meanMovementMs", stats.meanMovementMs.toDouble())
             put("perCell", cells)
+            put("perOrigin", origins)
             put("settings", configSnapshot())
         }
+    }
+
+    /**
+     * Compacts raw trial records into per-origin (attempts, hits)
+     * keyed by the designated launch cell. Aborted gestures are
+     * excluded — they were free retries and charged nothing, matching
+     * the per-cell accounting.
+     */
+    fun originTally(records: List<TrialRecord>): Map<BenchTarget, PerCellStats> {
+        val tally = LinkedHashMap<BenchTarget, PerCellStats>()
+        for (r in records) {
+            val origin = r.originCell ?: continue
+            if (r.outcome == TrialOutcome.ABORTED) continue
+            val st = tally.getOrPut(origin) { PerCellStats() }
+            st.attempts++
+            if (r.outcome == TrialOutcome.HIT) st.hits++
+        }
+        return tally
     }
 
     /**
@@ -111,6 +146,24 @@ object BenchStore {
     fun perCell(json: JSONObject): Map<BenchTarget, PerCellStats> {
         val map = HashMap<BenchTarget, PerCellStats>()
         val arr = json.optJSONArray("perCell") ?: return map
+        for (i in 0 until arr.length()) {
+            runCatching {
+                val o = arr.getJSONObject(i)
+                val t = BenchTarget(
+                    TargetLevel.valueOf(o.getString("level")),
+                    Ring.valueOf(o.getString("ring")),
+                    o.getInt("segment")
+                )
+                map[t] = PerCellStats(o.getInt("attempts"), o.getInt("hits"))
+            }
+        }
+        return map
+    }
+
+    /** Per-origin aggregates; empty map for pre-Package-0.1 files. */
+    fun originStatsOf(json: JSONObject): Map<BenchTarget, PerCellStats> {
+        val map = HashMap<BenchTarget, PerCellStats>()
+        val arr = json.optJSONArray("perOrigin") ?: return map
         for (i in 0 until arr.length()) {
             runCatching {
                 val o = arr.getJSONObject(i)

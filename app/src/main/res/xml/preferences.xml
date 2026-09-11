@@ -44,6 +44,15 @@
             app:min="10"
             android:max="40"
             app:showSeekBarValue="true" />
+            
+        <SeekBarPreference
+            android:key="menu_visual_scale"
+            android:title="Menu visual scale (%)"
+            android:summary="Enlarges the drawn menu for legibility — finger targets stay where they trained. Turn on Debug mode to see the true boundaries overlaid"
+            android:defaultValue="160"
+            app:min="100"
+            android:max="200"
+            app:showSeekBarValue="true" />
     </PreferenceCategory>
 
     <!-- ═══════════ Haptics ═══════════ -->
@@ -105,20 +114,13 @@
             android:key="haptic_deadzone_exit"
             android:title="Pulse on deadzone exit"
             android:summary="Vibrate when the finger leaves the centre deadzone"
-            android:defaultValue="true"
+            android:defaultValue="false"
             android:dependency="haptic_feedback" />
 
         <SwitchPreferenceCompat
             android:key="haptic_secondary_enter"
             android:title="Pulse on secondary menu"
             android:summary="Vibrate when entering the secondary (syllable) menu"
-            android:defaultValue="false"
-            android:dependency="haptic_feedback" />
-
-        <SwitchPreferenceCompat
-            android:key="haptic_secondary_ring_out"
-            android:title="Pulse on outer ring"
-            android:summary="Vibrate when moving from inner to outer ring on the secondary menu"
             android:defaultValue="false"
             android:dependency="haptic_feedback" />
 
@@ -132,15 +134,23 @@
         <SwitchPreferenceCompat
             android:key="haptic_ring_cross"
             android:title="Click on ring crossing"
-            android:summary="Light click when dragging between the inner and outer ring"
-            android:defaultValue="false"
+            android:summary="Light click when the finger moves between the inner and outer ring, on any menu, in either direction"
+            android:defaultValue="true"
             android:dependency="haptic_feedback" />
 
         <SwitchPreferenceCompat
             android:key="haptic_delete_tick"
             android:title="Delete selection tick"
             android:summary="Brief pulse each time the delete arm passes a character"
-            android:defaultValue="true" />
+            android:defaultValue="true"
+            android:dependency="haptic_feedback" />
+        
+        <SwitchPreferenceCompat
+            android:key="haptic_cursor_tick"
+            android:title="Cursor movement tick"
+            android:summary="Brief pulse each time the cursor gesture crosses a column or line — same strength as the delete tick"
+            android:defaultValue="true" 
+            android:dependency="haptic_feedback" />
     </PreferenceCategory>
 
     <!-- ═══════════ Typing behaviour ═══════════ -->
@@ -193,10 +203,25 @@
             android:key="mode_lock_grace"
             android:title="Menu settle delay (ms)"
             android:summary="After flicking to numbers/symbols, the menu follows the finger and ignores selection for this long"
-            android:defaultValue="80"
+            android:defaultValue="40"
             app:min="0"
             android:max="300"
             app:showSeekBarValue="true" />
+        
+        <SwitchPreferenceCompat
+            android:key="secondary_abort_ease_enabled"
+            android:title="Abort ease"
+            android:summary="Widen the cancel zone for pull-backs from the secondary menu"
+            android:defaultValue="true" />
+
+        <SeekBarPreference
+            android:key="secondary_abort_ease"
+            android:title="Abort ease distance"
+            android:summary="Extra pull-back distance that cancels a secondary selection"
+            app:min="0"
+            android:max="80"
+            android:defaultValue="40"
+            android:dependency="secondary_abort_ease_enabled" />
 
         <SwitchPreferenceCompat
             android:key="auto_space"
@@ -208,7 +233,7 @@
             android:key="auto_capitalization"
             android:title="Auto-capitalization"
             android:summary="Capitalize the first letter of sentences"
-            android:defaultValue="true" />
+            android:defaultValue="false" />
     </PreferenceCategory>
 
     <!-- ═══════════ Advanced — Launch feel ═══════════ -->
@@ -218,7 +243,7 @@
             android:key="onset_exit_angle"
             android:title="Launch-direction correction"
             android:summary="Blend the direction of travel into the angle that picks the column when leaving the centre — corrects curved flick launches"
-            android:defaultValue="true" />
+            android:defaultValue="false" />
 
         <SeekBarPreference
             android:key="onset_position_weight"
@@ -254,13 +279,13 @@
             android:key="radproj_enabled"
             android:title="Radial exit projection"
             android:summary="Commits are credited where the flick was headed — long flicks stop undershooting, slow steering stays exact"
-            android:defaultValue="false" />
+            android:defaultValue="true" />
 
         <SeekBarPreference
             android:key="radproj_horizon"
             android:title="Projection horizon"
             android:summary="How far ahead of the finger to look at commit (0–120 ms)"
-            android:defaultValue="40"
+            android:defaultValue="32"
             app:min="0"
             android:max="120"
             app:showSeekBarValue="true"
@@ -280,7 +305,7 @@
             android:key="segment_hysteresis"
             android:title="Segment hysteresis (degrees)"
             android:summary="Angular deadzone around segment boundaries (2.0° default)"
-            android:defaultValue="20"
+            android:defaultValue="0"
             app:min="0"
             android:max="50"
             app:showSeekBarValue="true" />
@@ -309,7 +334,7 @@
             android:key="cursor_sens_h"
             android:title="Cursor columns per mm"
             android:summary="Horizontal cursor speed (0.1 – 10.0)"
-            android:defaultValue="20"
+            android:defaultValue="10"
             app:min="1" android:max="100" app:showSeekBarValue="true" />
 
         <SeekBarPreference
@@ -334,8 +359,8 @@
             android:key="deadzone_radius"
             android:title="Deadzone size (dp)"
             android:summary="Radius of the centre zone where no character is selected"
-            android:defaultValue="18"
-            app:min="10"
+            android:defaultValue="5"
+            app:min="1"
             android:max="60"
             app:showSeekBarValue="true" />
 
@@ -343,8 +368,8 @@
             android:key="inner_ring_radius"
             android:title="Inner ring outer edge (dp)"
             android:summary="Outside radius of the inner row — lowering it squishes the inner ring"
-            android:defaultValue="64"
-            app:min="40"
+            android:defaultValue="50"
+            app:min="20"
             android:max="140"
             app:showSeekBarValue="true" />
 
@@ -352,8 +377,8 @@
             android:key="outer_ring_radius"
             android:title="Outer ring outer edge (dp)"
             android:summary="Outermost radius of the menu — lowering it squishes the outer row"
-            android:defaultValue="84"
-            app:min="80"
+            android:defaultValue="70"
+            app:min="40"
             android:max="240"
             app:showSeekBarValue="true" />
 

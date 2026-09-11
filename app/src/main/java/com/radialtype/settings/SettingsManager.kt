@@ -26,6 +26,7 @@ object SettingsManager {
     const val KEY_FLOATING_LABEL_OFFSET = "floating_label_offset"
     const val KEY_FLOATING_FONT = "floating_font_size"
     const val KEY_MENU_FONT = "menu_font_size"
+    const val KEY_MENU_SCALE = "menu_visual_scale"
 
     // ── Haptics ──────────────────────────────────────────────────
     const val KEY_HAPTICS = "haptic_feedback"
@@ -35,10 +36,10 @@ object SettingsManager {
     const val KEY_HAPTIC_PROGRESSIVE = "haptic_progressive_ticks"
     const val KEY_HAPTIC_DEADZONE_EXIT = "haptic_deadzone_exit"
     const val KEY_HAPTIC_SECONDARY_ENTER = "haptic_secondary_enter"
-    const val KEY_HAPTIC_SECONDARY_RING_OUT = "haptic_secondary_ring_out"
     const val KEY_HAPTIC_LABEL_TOUCH = "haptic_label_touch"
     const val KEY_HAPTIC_RING_CROSS = "haptic_ring_cross"
     const val KEY_HAPTIC_DELETE_TICK = "haptic_delete_tick"
+    const val KEY_HAPTIC_CURSOR_TICK = "haptic_cursor_tick"
     const val KEY_VIBRATION_LENGTH = "vibration_length"
 
     // ── Typing behaviour ─────────────────────────────────────────
@@ -48,6 +49,8 @@ object SettingsManager {
     const val KEY_DWELL_GATE_SPEED = "dwell_gate_speed"
     const val KEY_DOUBLE_TAP_DEADZONE = "double_tap_deadzone"
     const val KEY_MODE_LOCK_GRACE = "mode_lock_grace"
+    const val KEY_SECONDARY_ABORT_EASE = "secondary_abort_ease"
+    const val KEY_SECONDARY_ABORT_EASE_ENABLED = "secondary_abort_ease_enabled"
     const val KEY_AUTO_SPACE = "auto_space"
     const val KEY_AUTO_CAPITALIZATION = "auto_capitalization"
 
@@ -68,8 +71,8 @@ object SettingsManager {
     // ── Delete & cursor ──────────────────────────────────────────
     const val KEY_DELETE_RATE = "delete_chars_per_mm"
     const val KEY_DELETE_DEADZONE = "delete_deadzone_radius"
-    const val KEY_CURSOR_SENS_H = "cursor_sensitivity_h"
-    const val KEY_CURSOR_SENS_V = "cursor_sensitivity_v"
+    const val KEY_CURSOR_SENS_H = "cursor_sens_h"
+    const val KEY_CURSOR_SENS_V = "cursor_sens_v"
     const val KEY_CURSOR_DEADZONE = "cursor_deadzone_radius"
 
     // ── Ring geometry & reach ─────────────────────────────────────
@@ -129,8 +132,8 @@ object SettingsManager {
 
     const val CURSOR_SENS_MIN = 1    // tenths: 0.1
     const val CURSOR_SENS_MAX = 100  // tenths: 10.0
-    const val CURSOR_SENS_H_DEFAULT = 20   // 2.0 columns/mm
-    const val CURSOR_SENS_V_DEFAULT = 10   // 1.0 lines/cm
+    const val CURSOR_SENS_H_DEFAULT = 10   // columns/mm
+    const val CURSOR_SENS_V_DEFAULT = 10   // lines/cm
 
     const val CURSOR_DEADZONE_MIN = 2
     const val CURSOR_DEADZONE_MAX = 40
@@ -138,7 +141,15 @@ object SettingsManager {
 
     const val MODE_GRACE_MIN = 0
     const val MODE_GRACE_MAX = 300
-    const val MODE_GRACE_DEFAULT = 80
+    const val MODE_GRACE_DEFAULT = 40
+    
+    // Widening of the effective deadzone while the SECONDARY menu is
+    // open (dp). Makes "pull back to center to cancel" forgiving —
+    // the finger finds the deadzone ease-dp before it geometrically
+    // exists. 0 = today's exact-deadzone behavior.
+    const val SECONDARY_ABORT_EASE_MIN = 0
+    const val SECONDARY_ABORT_EASE_MAX = 80
+    const val SECONDARY_ABORT_EASE_DEFAULT = 40
 
     // ── Haptics ──────────────────────────────────────────────────
     const val VIBRATION_MIN = 1
@@ -164,17 +175,17 @@ object SettingsManager {
     const val HAPTIC_STYLE_DEFAULT = HAPTIC_STYLE_CLICK
 
     // ── Ring geometry & reach ─────────────────────────────────────
-    const val DEADZONE_MIN = 10f
+    const val DEADZONE_MIN = 1f
     const val DEADZONE_MAX = 60f
-    const val DEADZONE_DEFAULT = 18f
+    const val DEADZONE_DEFAULT = 5f
 
-    const val INNER_RING_MIN = 40f
+    const val INNER_RING_MIN = 20f
     const val INNER_RING_MAX = 140f
-    const val INNER_RING_DEFAULT = 64f
+    const val INNER_RING_DEFAULT = 50f
 
-    const val OUTER_RING_MIN = 80f
+    const val OUTER_RING_MIN = 40f
     const val OUTER_RING_MAX = 240f
-    const val OUTER_RING_DEFAULT = 84f
+    const val OUTER_RING_DEFAULT = 70f
 
     // Per-direction reach, percent. 100 = full reach (longest axis of
     // the shape), 50 = half. Values are RELATIVE: the getter
@@ -214,7 +225,7 @@ object SettingsManager {
     // steering (v≈0) projects nothing and stays exact.
     const val RADPROJ_HORIZON_MIN = 0         // ms
     const val RADPROJ_HORIZON_MAX = 120       // ms
-    const val RADPROJ_HORIZON_DEFAULT = 40
+    const val RADPROJ_HORIZON_DEFAULT = 32
 
     const val RADPROJ_SHIFT_MIN = 0           // dp
     const val RADPROJ_SHIFT_MAX = 40          // dp
@@ -223,9 +234,13 @@ object SettingsManager {
     // ── Launch feel: angular hysteresis (stored in tenths of a degree) ──
     const val SEGMENT_HYSTERESIS_MIN = 0   // 0.0°
     const val SEGMENT_HYSTERESIS_MAX = 50  // 5.0°
-    const val SEGMENT_HYSTERESIS_DEFAULT = 20 // 2.0°
+    const val SEGMENT_HYSTERESIS_DEFAULT = 0 // 2.0°
 
     // ── Rendering & display ──────────────────────────────────────
+    const val MENU_SCALE_MIN = 100       // % — 100 = drawn = classified
+    const val MENU_SCALE_MAX = 200
+    const val MENU_SCALE_DEFAULT = 160
+    
     const val FLOATING_OFFSET_MIN = 60
     const val FLOATING_OFFSET_MAX = 320
     const val FLOATING_OFFSET_DEFAULT = 180
@@ -295,6 +310,24 @@ object SettingsManager {
         set(value) = put {
             it.putInt(KEY_MENU_FONT, clamp(value, MENU_FONT_MIN, MENU_FONT_MAX))
         }
+    
+    /**
+     * Render-only menu scale (percent). Every radius drawn by
+     * RadialRenderer is multiplied by this value; GeometryEngine
+     * classification radii are untouched, so finger targets stay
+     * where muscle memory put them. Visual legibility preference
+     * over calibration transparency — off (=100) by default.
+     */
+    var menuVisualScalePct: Int
+        get() = clamp(prefs?.getInt(KEY_MENU_SCALE, MENU_SCALE_DEFAULT)
+            ?: MENU_SCALE_DEFAULT, MENU_SCALE_MIN, MENU_SCALE_MAX)
+        set(value) = put {
+            it.putInt(KEY_MENU_SCALE, clamp(value, MENU_SCALE_MIN, MENU_SCALE_MAX))
+        }
+
+    /** Scale factor the renderer multiplies drawn radii by (1.0 = off). */
+    val menuVisualScale: Float
+        get() = menuVisualScalePct / 100f
 
     // ════════════════════════════════════════════════════════════
     //  Haptics
@@ -346,11 +379,6 @@ object SettingsManager {
         get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_ENTER, false) ?: false
         set(value) = put { it.putBoolean(KEY_HAPTIC_SECONDARY_ENTER, value) }
 
-    /** Haptic pulse on secondary INNER → OUTER ring transition. */
-    var hapticSecondaryRingOut: Boolean
-        get() = prefs?.getBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, false) ?: false
-        set(value) = put { it.putBoolean(KEY_HAPTIC_SECONDARY_RING_OUT, value) }
-
     /** Tick when the finger lands on a cell that has a label. */
     var hapticLabelTouch: Boolean
         get() = prefs?.getBoolean(KEY_HAPTIC_LABEL_TOUCH, false) ?: false
@@ -365,6 +393,16 @@ object SettingsManager {
     var hapticDeleteTick: Boolean
         get() = prefs?.getBoolean(KEY_HAPTIC_DELETE_TICK, true) ?: true
         set(value) = put { it.putBoolean(KEY_HAPTIC_DELETE_TICK, value) }
+    
+    /**
+     * Cursor haptic parity (Package 0.4): one tick per net column/line
+     * crossing during CURSOR drags. Independent of the delete toggle —
+     * they share the tick AMPLITUDE (hapticTickIntensity) but can be
+     * switched separately. Defaults to true, mirroring the delete tick.
+     */
+    var hapticCursorTick: Boolean
+        get() = prefs?.getBoolean(KEY_HAPTIC_CURSOR_TICK, true) ?: true
+        set(value) = put { it.putBoolean(KEY_HAPTIC_CURSOR_TICK, value) }
 
     // ════════════════════════════════════════════════════════════
     //  Typing behaviour
@@ -412,6 +450,20 @@ object SettingsManager {
         set(value) = put {
             it.putInt(KEY_MODE_LOCK_GRACE, clamp(value, MODE_GRACE_MIN, MODE_GRACE_MAX))
         }
+    
+    /** Extra deadzone radius (dp) while the secondary menu is open. */
+    var secondaryAbortEaseDp: Float
+        get() = clamp(prefs?.getInt(KEY_SECONDARY_ABORT_EASE, SECONDARY_ABORT_EASE_DEFAULT)
+            ?: SECONDARY_ABORT_EASE_DEFAULT,
+            SECONDARY_ABORT_EASE_MIN, SECONDARY_ABORT_EASE_MAX).toFloat()
+        set(value) = put {
+            it.putInt(KEY_SECONDARY_ABORT_EASE, clamp(value.toInt(),
+                SECONDARY_ABORT_EASE_MIN, SECONDARY_ABORT_EASE_MAX))
+        }
+    
+        /** Master toggle for the retreat-gated abort ease. */
+    val secondaryAbortEaseEnabled: Boolean
+        get() = prefs?.getBoolean(KEY_SECONDARY_ABORT_EASE_ENABLED, true) ?: true
 
     var autoSpaceEnabled: Boolean
         get() = prefs?.getBoolean(KEY_AUTO_SPACE, false) ?: false

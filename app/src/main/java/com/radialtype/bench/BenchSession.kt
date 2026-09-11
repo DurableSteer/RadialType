@@ -38,6 +38,19 @@ data class SessionStats(
 }
 
 /**
+ * One playlist entry: the cell to hit, plus (SECONDARY trials only) the
+ * PRIMARY cell designated as the gesture's launch point. The origin is
+ * where the finger must flick first and dwell — it fixes the approach
+ * angle and travel distance, so secondary hit rate stops being a blend
+ * of skill × arbitrary origin. Origin is null for PRIMARY trials and
+ * always PRIMARY-level otherwise.
+ */
+data class BenchTrial(
+    val target: BenchTarget,
+    val origin: BenchTarget?
+)
+
+/**
  * Drives one benchmark run: an even-coverage, seeded-shuffle queue of
  * targets plus the bookkeeping that turns results into statistics.
  *
@@ -49,6 +62,18 @@ data class SessionStats(
  * wedge the session, it just ends under-covered. Aborted trials
  * (deadzone lift, cancel) consume nothing and are re-queued for free:
  * the user entered nothing, so the attempt didn't happen.
+ *
+ * Origin contract (Package 0.1): every SECONDARY trial in the playlist
+ * is paired with a PRIMARY origin cell, assigned by cycling a seeded
+ * shuffle of all 16 primary cells (round-robin / balanced-Latin-square
+ * style). With 16 secondary cells × trialsPerTarget trials and 16
+ * origins, each origin gets exactly trialsPerTarget trials and each of
+ * the 8 directions gets 2·trialsPerTarget (= N_secondary/8) — within ±1
+ * always. The rotation derives from the seed via a dedicated RNG salt,
+ * so the same seed replays IDENTICAL (origin, target) pairs — A/B runs
+ * under bench_repeat_seed share both playlist order and origins.
+ * Re-queued misses carry their original origin; the pair is never
+ * re-rolled.
  */
 class BenchSession(
     seed: Long = System.currentTimeMillis(),
@@ -71,15 +96,39 @@ class BenchSession(
             val spread = z * sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
             return (center - spread).coerceAtLeast(0.0)..(center + spread).coerceAtMost(1.0)
         }
+
+        /** Salt separating the origin-rotation RNG stream from the shuffle. */
+        private const val ORIGIN_STREAM_SALT = 0x5EEDC0DEL
     }
 
-    private val queue = ArrayDeque<BenchTarget>()
+    private val queue = ArrayDeque<BenchTrial>()
     private val perCell = LinkedHashMap<BenchTarget, PerCellStats>()
     private var abortedCount = 0
     private val retriesUsed = LinkedHashMap<BenchTarget, Int>()
     private val movementTimes = mutableListOf<Long>()
-    private var current: BenchTarget? = null
+    private var current: BenchTrial? = null
     private var currentIsRetry = false
+
+    /**
+     * Seeded rotation of all 16 PRIMARY cells, used round-robin as the
+     * origin assignment for SECONDARY trials. Derived from the seed
+     * through a dedicated RNG stream so the rotation is independent of
+     * playlist-length changes (e.g. primary-only vs. full sessions).
+     */
+    private val originRotation: List<BenchTarget> = run {
+        val origins = mutableListOf<BenchTarget>()
+        for (ring in listOf(Ring.INNER, Ring.OUTER)) {
+            for (seg in 0 until 8) {
+                origins.add(BenchTarget(TargetLevel.PRIMARY, ring, seg))
+            }
+        }
+        val rnd = Random(seed xor ORIGIN_STREAM_SALT)
+        for (i in origins.size - 1 downTo 1) {
+            val j = rnd.nextInt(i + 1)
+            val tmp = origins[i]; origins[i] = origins[j]; origins[j] = tmp
+        }
+        origins
+    }
 
     val remaining: Int get() = queue.size
     val isFinished: Boolean get() = queue.isEmpty() && current == null
@@ -103,17 +152,37 @@ class BenchSession(
             val j = rnd.nextInt(i + 1)
             val tmp = targets[i]; targets[i] = targets[j]; targets[j] = tmp
         }
-        targets.forEach { queue.add(it) }
-        targets.forEach { perCell[it] = PerCellStats() }
+
+        // Pair each SECONDARY trial with the next origin in the seeded
+        // rotation. Cycling a shuffled 16-cell rotation over 16t
+        // secondary trials yields each origin exactly t times.
+        var originIdx = 0
+        for (t in targets) {
+            val origin = if (t.level == TargetLevel.SECONDARY)
+                originRotation[originIdx++ % originRotation.size]
+            else null
+            queue.add(BenchTrial(t, origin))
+            perCell[t] = PerCellStats()
+        }
     }
 
     /** Current target to display, or null when the session is done. */
-    fun nextTarget(): BenchTarget? {
+    fun nextTarget(): BenchTarget? = nextTrial()?.target
+
+    /**
+     * Current playlist entry (target + origin), or null when the session
+     * is done. Calling repeatedly without [recordResult] keeps returning
+     * the same trial.
+     */
+    fun nextTrial(): BenchTrial? {
         if (current != null) return current
         current = queue.removeFirstOrNull()
         currentIsRetry = false
         return current
     }
+
+    /** Designated origin of the current trial; null for PRIMARY trials. */
+    fun currentOrigin(): BenchTarget? = current?.origin
 
     val plannedTrials: Int = trialsPerTarget *
         (if (includeSecondary) 32 else 16)
@@ -121,11 +190,13 @@ class BenchSession(
     /**
      * Consumes the current target. Call exactly once per completed trial,
      * with the record the GestureLogger produced (its outcome drives
-     * the bookkeeping).
+     * the bookkeeping). The origin pairing travels with the trial on
+     * every re-queue, so retries keep the original approach direction.
      */
     fun recordResult(record: TrialRecord) {
-        val target = current ?: return
+        val trial = current ?: return
         current = null
+        val target = trial.target
         val stats = perCell.getOrPut(target) { PerCellStats() }
         when (record.outcome) {
             TrialOutcome.HIT -> {
@@ -135,11 +206,11 @@ class BenchSession(
             TrialOutcome.MISS -> {
                 stats.attempts++
                 // Re-queue for a later attempt, unless the cell already
-                // burned its retry budget.
+                // burned its retry budget. The original origin is kept.
                 val used = (retriesUsed[target] ?: 0) + 1
                 retriesUsed[target] = used
                 if (stats.attempts < maxAttemptsPerCell) {
-                    queue.addLast(target)
+                    queue.addLast(trial)
                 }
             }
             TrialOutcome.ABORTED -> {
@@ -147,7 +218,7 @@ class BenchSession(
                 // without charging the cell, but count the abort so the
                 // session can flag a struggling user.
                 abortedCount++
-                queue.addFirst(target)
+                queue.addFirst(trial)
             }
         }
     }
