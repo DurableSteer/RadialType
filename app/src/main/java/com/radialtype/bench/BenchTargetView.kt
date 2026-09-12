@@ -87,6 +87,11 @@ class BenchTargetView(context: Context) : View(context) {
         strokeWidth = 4f * density
         strokeCap = Paint.Cap.ROUND
     }
+    private val bandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 7f * density
+        strokeCap = Paint.Cap.BUTT
+    }
     private val headPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -153,6 +158,22 @@ class BenchTargetView(context: Context) : View(context) {
             drawDoubleArrow(canvas, cx, cy, arrows[0], arrows[1])
             return
         }
+        
+        // Special case #2: exactly-opposite flicks with DIFFERENT
+        // rings. The chained path plant → far tip → landing point
+        // retraces the same shaft; a naive chain buries the outbound
+        // head under the return and truncates both legs to the same
+        // visible size. Render the return as a wider orange band
+        // capping the shared leg: the blue arrow reads full-length
+        // with its far head sharp, and the band's head marks the
+        // landing ring.
+        if (arrows.size == 2 &&
+            segDiff(arrows[1].segment, arrows[0].segment) == 4 &&
+            arrows[0].ring != arrows[1].ring
+        ) {
+            drawBacktrackBand(canvas, cx, cy, arrows[0], arrows[1])
+            return
+        }
 
         // General case: chain anchors in undisplaced path order —
         // each arrow starts at the previous arrow's tip.
@@ -187,12 +208,16 @@ class BenchTargetView(context: Context) : View(context) {
     }
 
     /**
-     * Special-case render: one pink shaft through the plant, a head
-     * at each end — blue toward flick 1's segment, orange toward
-     * flick 2's. The shaft stops one head-length short of each tip
-     * so the round stroke cap hides under the head base instead of
-     * poking past the tip (which made heads read blunt). Each leg is
-     * SHORT/LONG per the shared ring; the full span is 2× the leg.
+     * Special-case render: exactly-opposite segments with the SAME
+     * ring. The chained path plant → far tip → plant exactly retraces
+     * itself: flick 2 starts at flick 1's tip and its own tip lands
+     * back ON the plant dot (same length, opposite direction). One
+     * pink shaft spans the leg; flick 1's head caps the far end,
+     * flick 2's head caps the plant end — a true chain, total span
+     * one leg. Order is unambiguous: flick 1 cannot end where it
+     * started, so the head touching the plant is flick 2's arrival.
+     * The shaft stops one head-length short of the far tip so the
+     * round cap hides under the head base (no blunt tips).
      */
     private fun drawDoubleArrow(
         canvas: Canvas, cx: Float, cy: Float, first: ArrowSpec, second: ArrowSpec
@@ -204,16 +229,74 @@ class BenchTargetView(context: Context) : View(context) {
         val headLen = 9f * density
         val shaftLen = (len - headLen).coerceAtLeast(4f * density)
 
+        // Shared shaft (pink), spanning the single leg.
         shaftPaint.color = COL_BACKTRACK
         scratch.reset()
-        scratch.moveTo(cx - dirX * shaftLen, cy - dirY * shaftLen)
+        scratch.moveTo(cx + dirX * 2f * density, cy + dirY * 2f * density)
         scratch.lineTo(cx + dirX * shaftLen, cy + dirY * shaftLen)
         canvas.drawPath(scratch, shaftPaint)
 
-        // Head toward flick 1 (positive direction).
+        // Flick 1's head at the far tip (pointing outward).
         drawHead(canvas, cx + dirX * len, cy + dirY * len, dirX, dirY, COL_BACKTRACK)
-        // Head toward flick 2 (opposite direction).
-        drawHead(canvas, cx - dirX * len, cy - dirY * len, -dirX, -dirY, COL_BACKTRACK)
+        // Flick 2's head with its tip ON the plant (pointing back
+        // toward it) — the chain closes where the gesture began.
+        drawHead(canvas, cx, cy, -dirX, -dirY, COL_BACKTRACK)
+
+        // Redraw the plant dot on top so the start/end point stays
+        // marked under flick 2's head tip.
+        canvas.drawCircle(cx, cy, 3.5f * density, plantPaint)
+    }
+    
+        /**
+     * Special-case #2 render: exactly-opposite flicks with DIFFERENT
+     * rings. The chained path plant → far tip → landing point all lies
+     * on ONE shaft (flick 2 retraces flick 1's direction in reverse),
+     * so two full arrows would bury each other. Instead: flick 1 draws
+     * as a normal blue arrow; flick 2 renders as a wide orange BUTT-cap
+     * band spanning the return leg (flick 1's far tip → landing point,
+     * which sits len2 back along the ray, possibly past the plant when
+     * flick 2 is the LONGER leg), capped by an orange head at the
+     * landing point pointing along flick 2's travel. The blue head is
+     * redrawn LAST so it stays sharp atop the band. Ring order reads
+     * from the two head positions: blue at flick 1's tip, orange at
+     * flick 2's landing.
+     */
+    private fun drawBacktrackBand(
+        canvas: Canvas, cx: Float, cy: Float, first: ArrowSpec, second: ArrowSpec
+    ) {
+        val rad = Math.toRadians((first.segment * 45f).toDouble())
+        val dirX = cos(rad).toFloat()
+        val dirY = sin(rad).toFloat()
+        val len1 = arrowLen(first.ring)
+        val len2 = arrowLen(second.ring)
+
+        // Flick 1: full blue arrow from the plant.
+        drawArrow(canvas, cx, cy, first)
+
+        // Flick 2: orange band retracing the shaft from flick 1's far
+        // tip to the landing point len2 back along the ray. When
+        // len2 > len1 the landing crosses the plant to the opposite
+        // side — the band legitimately spans past it.
+        val tipX = cx + dirX * len1
+        val tipY = cy + dirY * len1
+        val landX = tipX - dirX * len2
+        val landY = tipY - dirY * len2
+        scratch.reset()
+        scratch.moveTo(tipX, tipY)
+        scratch.lineTo(landX, landY)
+        bandPaint.color = COL_SECONDARY
+        canvas.drawPath(scratch, bandPaint)
+
+        // Orange head at the landing point, pointing along flick 2's
+        // travel (back toward the plant side).
+        drawHead(canvas, landX, landY, -dirX, -dirY, COL_SECONDARY)
+
+        // Blue head redrawn last — stays sharp atop the band.
+        drawHead(canvas, tipX, tipY, dirX, dirY, COL_PRIMARY)
+
+        // Plant dot on top so the chain origin stays marked, even when
+        // flick 2's band crosses it.
+        canvas.drawCircle(cx, cy, 3.5f * density, plantPaint)
     }
 
     /**

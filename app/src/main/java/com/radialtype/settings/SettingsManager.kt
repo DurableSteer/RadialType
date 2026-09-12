@@ -44,6 +44,7 @@ object SettingsManager {
 
     // ── Typing behaviour ─────────────────────────────────────────
     const val KEY_DWELL_DURATION = "dwell_duration"
+    const val KEY_DWELL_BEND_DELAY = "dwell_bend_delay"
     const val KEY_DWELL_GATE_ENABLED = "dwell_gate_enabled"
     const val KEY_DWELL_GATE_MODE = "dwell_gate_mode"
     const val KEY_DWELL_GATE_SPEED = "dwell_gate_speed"
@@ -116,6 +117,13 @@ object SettingsManager {
     const val DWELL_MIN = 1
     const val DWELL_MAX = 800
     const val DWELL_DEFAULT = 90
+    
+     // Bend-leg fire delay (ms) after a qualifying valley. Independent
+    // of the stillness duration so the stillness leg keeps its latency
+    // while bend fires land after the settle tail.
+    const val DWELL_BEND_DELAY_MIN = 0
+    const val DWELL_BEND_DELAY_MAX = 400
+    const val DWELL_BEND_DELAY_DEFAULT = 80
 
     const val DWELL_GATE_SPEED_MIN = 1        // 0.01 dp/ms
     const val DWELL_GATE_SPEED_MAX = 50       // 0.50 dp/ms
@@ -149,7 +157,7 @@ object SettingsManager {
     // exists. 0 = today's exact-deadzone behavior.
     const val SECONDARY_ABORT_EASE_MIN = 0
     const val SECONDARY_ABORT_EASE_MAX = 80
-    const val SECONDARY_ABORT_EASE_DEFAULT = 40
+    const val SECONDARY_ABORT_EASE_DEFAULT = 30
 
     // ── Haptics ──────────────────────────────────────────────────
     const val VIBRATION_MIN = 1
@@ -181,11 +189,11 @@ object SettingsManager {
 
     const val INNER_RING_MIN = 20f
     const val INNER_RING_MAX = 140f
-    const val INNER_RING_DEFAULT = 50f
+    const val INNER_RING_DEFAULT = 60f
 
     const val OUTER_RING_MIN = 40f
     const val OUTER_RING_MAX = 240f
-    const val OUTER_RING_DEFAULT = 70f
+    const val OUTER_RING_DEFAULT = 80f
 
     // Per-direction reach, percent. 100 = full reach (longest axis of
     // the shape), 50 = half. Values are RELATIVE: the getter
@@ -412,6 +420,14 @@ object SettingsManager {
         get() = clamp(prefs?.getInt(KEY_DWELL_DURATION, DWELL_DEFAULT) ?: DWELL_DEFAULT,
             DWELL_MIN, DWELL_MAX)
         set(value) = put { it.putInt(KEY_DWELL_DURATION, clamp(value, DWELL_MIN, DWELL_MAX)) }
+    
+    var dwellBendDelayMs: Int
+        get() = clamp(prefs?.getInt(KEY_DWELL_BEND_DELAY, DWELL_BEND_DELAY_DEFAULT)
+            ?: DWELL_BEND_DELAY_DEFAULT, DWELL_BEND_DELAY_MIN, DWELL_BEND_DELAY_MAX)
+        set(value) = put {
+            it.putInt(KEY_DWELL_BEND_DELAY,
+                clamp(value, DWELL_BEND_DELAY_MIN, DWELL_BEND_DELAY_MAX))
+        }
 
     /** When on, dwell only completes if the finger stays below the speed ceiling. */
     var dwellGateEnabled: Boolean

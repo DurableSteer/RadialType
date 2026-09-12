@@ -71,6 +71,9 @@ class TouchStateMachine(
         /** Default dwell duration before PRIMARY → SECONDARY. */
         const val DEFAULT_DWELL_MS = 125L
         
+        /** Fallback bend-leg fire delay (ms) when settings unavailable. */
+        const val BEND_DELAY_DEFAULT_MS = 120L
+        
         /** Position share in the onset-weighted exit-angle blend (rest = velocity). */
         const val ONSET_POSITION_WEIGHT = 0.6f
 
@@ -87,6 +90,13 @@ class TouchStateMachine(
          *  this wall-clock window of the timer maturing. Covers batching
          *  overlap; a parked finger goes stale instantly and is allowed. */
         const val DWELL_GATE_FIRE_GRACE_MS = 50L
+        
+        /** Speed (dp/ms) a move must exceed to count as a HARD move — the
+         *  only motion fast enough to DEFER an armed bend fire (Package:
+         *  hard-move split). ~10× the stillness ceiling, so a decelerating
+         *  glide-in toward the secondary landing no longer starves the
+         *  bend-earned fire; only a genuine second stroke can veto it. */
+        const val BEND_DEFER_SPEED_DP_PER_MS = 0.30f
         
         /** Look-back window (ms) for the bend (speed-minimum) detector.
          *  Must fit inside MotionHistory's retained span (~130–260 ms
@@ -217,6 +227,15 @@ class TouchStateMachine(
      * indefinitely, re-blocking every dwell fire (the 400–500 ms lag).
      */
     private var lastFastMoveWallMs = 0L
+    
+        /**
+     * Wall-clock stamp of the last HARD move — speed at or above
+     * [BEND_DEFER_SPEED_DP_PER_MS]. Used ONLY by the armed-fire deferral
+     * guards: unlike [lastFastMoveWallMs] (stillness semantics), a slow
+     * continuation after the bend valley is not a veto. 0 = none this
+     * gesture.
+     */
+    private var lastHardMoveWallMs = 0L
     
     /**
      * Timestamp of the speed-minimum the dwell timer is currently
@@ -465,6 +484,7 @@ class TouchStateMachine(
         lastUpTimestamp = 0L
         lastUpInDeadzone = false
         modeGraceActive = false
+        lastHardMoveWallMs = 0L
         modeGraceDeadline = 0L
         bendFireRetryCount = 0
         cursorColumns = 0
@@ -559,12 +579,17 @@ class TouchStateMachine(
                     // means the valley was mid-glide: defer and re-probe.
                     // A genuine park goes stale within the grace window
                     // and fires on the next maturity.
-                    val sinceFastMs = SystemClock.uptimeMillis() - lastFastMoveWallMs
-                    if (lastFastMoveWallMs != 0L &&
-                        sinceFastMs < DWELL_GATE_FIRE_GRACE_MS
+                    
+                    // Hard-move split: only a genuinely fast stroke (>0.30
+                    // dp/ms) may defer an ARMED bend fire. A decelerating
+                    // glide continuing toward the secondary landing keeps
+                    // the schedule; a hard second flick vetoes it.
+                    val sinceHardMs = SystemClock.uptimeMillis() - lastHardMoveWallMs
+                    if (lastHardMoveWallMs != 0L &&
+                        sinceHardMs < DWELL_GATE_FIRE_GRACE_MS
                     ) {
-                        Log.d(TAG, "Bend gate: armed fire deferred — fast move " +
-                              "$sinceFastMs ms ago")
+                        Log.d(TAG, "Bend gate: armed fire deferred — hard move " +
+                              "$sinceHardMs ms ago")
                         dwellTimer.cancel()
                         dwellTimer.start(BEND_ARM_RETRY_MS)
                         return
@@ -580,8 +605,20 @@ class TouchStateMachine(
                             dwellTimer.start(dwellDurationMs)
                             return
                         }
+                    } else {
+                        // Hard-move split (see BEND branch note).
+                        val sinceHardMs = SystemClock.uptimeMillis() - lastHardMoveWallMs
+                        if (lastHardMoveWallMs != 0L &&
+                            sinceHardMs < DWELL_GATE_FIRE_GRACE_MS
+                        ) {
+                            Log.d(TAG, "Hybrid gate: armed fire deferred — hard move " +
+                                  "$sinceHardMs ms ago")
+                            dwellTimer.cancel()
+                            dwellTimer.start(BEND_ARM_RETRY_MS)
+                            return
+                        }
                     }
-                    // Armed bend (or quiescent stillness) → fire.
+                    // Armed + quiescent, or clean stillness → fire.
                 }
                 else -> {
                     val sinceFastMs = SystemClock.uptimeMillis() - lastFastMoveWallMs
@@ -652,6 +689,7 @@ class TouchStateMachine(
         motionHistory.add(event.x, event.y, event.eventTime)
         lastArmedBendTimeMs = 0L
         bendFireRetryCount = 0
+        lastHardMoveWallMs = 0L
         benchObserver?.onGestureStart(event.x, event.y, event.eventTime)
 
         // Arming rule A: previous gesture ended in the deadzone and this
@@ -1273,12 +1311,26 @@ class TouchStateMachine(
      * so the gate is a no-op there.
      */
     private fun applyDwellStillnessGate() {
+        // Master-toggle consistency: every consumer of the gate
+        // (enterSecondary, maybeRestartDwellOnMotion) honors
+        // dwellGateEnabled — the move side must too. Without this,
+        // a disabled gate in bend/hybrid mode still arms fires it
+        // will not protect (the shield in maybeRestartDwellOnMotion
+        // requires the enable flag), and every post-arm cell crossing
+        // silently murders the schedule.
+        if (!dwellGateEnabled()) {
+            dwellTimer.reset()
+            return
+        }
         if (state == TouchState.PRIMARY) {
             val speed = currentFingerSpeedDpPerMs()
             val fast = speed >= dwellGateMaxSpeedDpPerMs()
             if (fast) {
                 lastDwellFireSpeedDpPerMs = speed
                 lastFastMoveWallMs = SystemClock.uptimeMillis()
+                if (speed >= BEND_DEFER_SPEED_DP_PER_MS) {
+                    lastHardMoveWallMs = SystemClock.uptimeMillis()
+                }
             }
             when (gateMode()) {
                 SettingsManager.GATE_MODE_BEND,
@@ -1301,7 +1353,7 @@ class TouchStateMachine(
                                 lastArmedBendTimeMs = bend.timeMs
                                 bendFireRetryCount = 0
                                 dwellTimer.cancel()
-                                dwellTimer.start((dwellDurationMs - ageMs).coerceAtLeast(1L))
+                                dwellTimer.start((dwellBendDelayMs() - ageMs).coerceAtLeast(1L))
                             }
                         }
                     }
@@ -1343,6 +1395,10 @@ class TouchStateMachine(
     private fun dwellGateMaxSpeedDpPerMs(): Float =
         if (SettingsManager.isInitialized) SettingsManager.dwellGateMaxSpeedDpPerMs
         else DWELL_GATE_MAX_SPEED
+    
+    private fun dwellBendDelayMs(): Long =
+        if (SettingsManager.isInitialized) SettingsManager.dwellBendDelayMs.toLong()
+        else BEND_DELAY_DEFAULT_MS
     
         /**
      * Shared qualification test for a candidate bend. The approach

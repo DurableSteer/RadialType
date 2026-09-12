@@ -164,6 +164,16 @@
             app:min="1"
             android:max="800"
             app:showSeekBarValue="true" />
+            
+        <SeekBarPreference
+            app:key="dwell_bend_delay"
+            app:title="Bend fire delay"
+            app:summary="Delay after a detected bend before the menu opens (ms)"
+            app:min="0"
+            android:max="400"
+            android:defaultValue="90"
+            app:showSeekBarValue="true"
+            app:dependency="dwell_gate_enabled" />
 
         <SwitchPreferenceCompat
             android:key="dwell_gate_enabled"
@@ -220,7 +230,7 @@
             android:summary="Extra pull-back distance that cancels a secondary selection"
             app:min="0"
             android:max="80"
-            android:defaultValue="40"
+            android:defaultValue="30"
             android:dependency="secondary_abort_ease_enabled" />
 
         <SwitchPreferenceCompat
@@ -368,7 +378,7 @@
             android:key="inner_ring_radius"
             android:title="Inner ring outer edge (dp)"
             android:summary="Outside radius of the inner row — lowering it squishes the inner ring"
-            android:defaultValue="50"
+            android:defaultValue="60"
             app:min="20"
             android:max="140"
             app:showSeekBarValue="true" />
@@ -377,7 +387,7 @@
             android:key="outer_ring_radius"
             android:title="Outer ring outer edge (dp)"
             android:summary="Outermost radius of the menu — lowering it squishes the outer row"
-            android:defaultValue="70"
+            android:defaultValue="80"
             app:min="40"
             android:max="240"
             app:showSeekBarValue="true" />
